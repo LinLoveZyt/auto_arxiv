@@ -1,0 +1,58 @@
+# requirements.txt
+
+# --- Core Framework ---
+# 用于构建Web API
+fastapi
+# ASGI服务器，用于运行FastAPI应用
+uvicorn[standard]
+
+# --- LLM and Embeddings ---
+# Ollama官方Python客户端，用于与本地LLM交互
+ollama
+# Sentence-Transformers库，用于加载和使用嵌入模型
+sentence-transformers
+# Transformers库，Sentence-Transformers的底层依赖
+transformers
+# Torch，机器学习框架
+torch
+
+# --- Vector Database ---
+# FAISS的CPU版本。如果您的机器有NVIDIA GPU并配置了CUDA，可以替换为 faiss-gpu
+# faiss-cpu
+faiss-gpu
+
+# --- Data Fetching and Processing ---
+# arXiv API的Python封装库
+arxiv
+# 用于解析PDF、HTML等多种格式的文档，提取结构化文本
+unstructured[local-inference]
+# unstructured依赖的包，建议显式安装
+beautifulsoup4
+lxml
+# pypdf是unstructured处理PDF时常用的后端
+pypdf
+
+# --- PDF & Report Generation ---
+# 用于将JSON数据生成为PDF报告
+reportlab
+
+# --- Utility & Helpers ---
+# 用于数据验证和设置管理，FastAPI的核心依赖
+pydantic
+# 用于从.env文件加载环境变量，管理敏感信息
+python-dotenv
+# 一个轻量级的任务调度库，用于定时执行每日任务
+schedule
+
+
+
+# 用于日志的可视化色彩输出
+colorlog
+# 下载pdf文件使用的库
+httpx
+# 命令行交互
+typer[all]
+# web-ui
+gradio
+
+googlesearch-python

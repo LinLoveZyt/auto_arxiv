@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auto-ARVIX 工作台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://rsms.me/inter/inter.css');
+        html { font-family: 'Inter', sans-serif; scroll-behavior: smooth; }
+        body { background-color: #111827; color: #d1d5db; }
+        .sidebar-icon { width: 1.5rem; height: 1.5rem; }
+        .nav-link { transition: all 0.2s ease-in-out; }
+        .nav-link.active, .nav-link:hover { background-color: #374151; color: #ffffff; }
+        .card { background-color: #1f2937; border: 1px solid #374151; border-radius: 0.75rem; }
+        .btn { display: inline-flex; align-items: center; justify-content: center; font-weight: 600; padding: 0.75rem 1.5rem; border-radius: 0.5rem; transition: all 0.2s ease-in-out; }
+        .btn-primary { background-color: #3b82f6; border-color: #3b82f6; color: white; }
+        .btn-primary:hover { background-color: #2563eb; }
+        .btn-secondary { background-color: #4b5563; border-color: #4b5563; color: white; }
+        .btn-secondary:hover { background-color: #374151; }
+        .btn-danger { background-color: #dc2626; border-color: #dc2626; color: white; }
+        .btn-danger:hover { background-color: #b91c1c; }
+        .btn:disabled { background-color: #4b5563; cursor: not-allowed; }
+        .form-input, .form-select, .form-textarea { background-color: #374151; border-color: #4b5563; color: #d1d5db; border-radius: 0.5rem; }
+        .form-input:focus, .form-select:focus, .form-textarea:focus { background-color: #4b5563; border-color: #3b82f6; box-shadow: none; color: #ffffff; }
+        .prose-invert a { color: #60a5fa; }
+        .prose-invert a:hover { color: #93c5fd; }
+        .toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background-color: #1f2937; color: white; padding: 1rem 1.5rem; border-radius: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05); transition: all 0.5s ease; z-index: 50; }
+        .toast.success { background-color: #16a34a; }
+        .toast.error { background-color: #dc2626; }
+        .form-label { display: block; font-weight: 600; color: #d1d5db; margin-bottom: 0.25rem; }
+        .form-group { margin-bottom: 1.5rem; }
+        [v-cloak] { display: none; }
+    </style>
+</head>
+<body>
+    <div id="app" class="flex h-screen" v-cloak>
+        <!-- Sidebar -->
+        <aside class="w-64 bg-gray-900 text-gray-300 p-4 flex-shrink-0 flex flex-col">
+            <div class="flex items-center mb-8 flex-shrink-0">
+                <i class="fas fa-rocket text-3xl text-blue-500 mr-3"></i>
+                <h1 class="text-2xl font-bold text-white">Auto-ARVIX</h1>
+            </div>
+            <nav class="space-y-2">
+                <a href="#" @click.prevent="switchPage('query')" :class="{'active': currentPage === 'query'}" class="nav-link flex items-center p-3 rounded-lg">
+                    <i class="fas fa-comments sidebar-icon mr-4"></i><span>智能问答</span>
+                </a>
+                <a href="#" @click.prevent="switchPage('reports')" :class="{'active': currentPage === 'reports'}" class="nav-link flex items-center p-3 rounded-lg">
+                    <i class="fas fa-file-alt sidebar-icon mr-4"></i><span>历史报告</span>
+                </a>
+                 <a href="#" @click.prevent="switchPage('workflow')" :class="{'active': currentPage === 'workflow'}" class="nav-link flex items-center p-3 rounded-lg">
+                    <i class="fas fa-cogs sidebar-icon mr-4"></i><span>任务中心</span>
+                </a>
+                <a href="#" @click.prevent="switchPage('settings')" :class="{'active': currentPage === 'settings'}" class="nav-link flex items-center p-3 rounded-lg">
+                    <i class="fas fa-sliders-h sidebar-icon mr-4"></i><span>系统设置</span>
+                </a>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 p-8 overflow-y-auto">
+            <!-- Query Page -->
+            <div v-if="currentPage === 'query'">
+                <h2 class="text-3xl font-bold text-white mb-6">智能问答</h2>
+                <div class="card p-6 mb-6">
+                    <form @submit.prevent="handleQuery">
+                        <textarea v-model="queryText" class="form-textarea w-full p-3 text-lg mb-4" rows="4" placeholder="例如：介绍一下多智能体系统的最新进展..."></textarea>
+                        
+                        <div class="flex justify-between items-center">
+                             <!-- Online Search Toggle -->
+                            <div class="flex items-center">
+                                <label for="online-search-toggle" class="mr-3 text-gray-400">在线搜索:</label>
+                                <div @click="onlineSearchEnabled = !onlineSearchEnabled" class="relative inline-block w-12 h-6 rounded-full cursor-pointer transition-colors duration-300" :class="onlineSearchEnabled ? 'bg-blue-600' : 'bg-gray-600'">
+                                    <span class="absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform duration-300" :class="{ 'transform translate-x-6': onlineSearchEnabled }"></span>
+                                </div>
+                            </div>
+
+                            <button type="submit" :disabled="isQuerying" class="btn btn-primary">
+                                <i v-if="isQuerying" class="fas fa-spinner fa-spin mr-2"></i>
+                                {{ isQuerying ? '查询中...' : '提交查询' }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div v-if="progressMessages.length > 0" class="card p-6 mb-6">
+                    <h3 class="text-xl font-semibold text-white mb-4">处理进度</h3>
+                    <ul class="space-y-3"><li v-for="msg in progressMessages" class="text-gray-400 animate-pulse">⏳ {{ msg }}</li></ul>
+                </div>
+                <div v-if="queryResult.answer">
+                    <div class="card p-6 mb-6"><h3 class="text-xl font-semibold text-white mb-4">AI 回答</h3><div class="prose prose-invert max-w-none" v-html="parsedAnswer"></div></div>
+                    <h3 class="text-2xl font-bold text-white mb-4">来源论文 ({{ queryResult.sources.length }})</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div v-for="source in queryResult.sources" class="card p-5 flex flex-col transition hover:border-blue-500 hover:scale-105">
+                            <h4 class="font-bold text-lg text-white mb-2">{{ source.title }}</h4>
+                            <p class="text-sm text-blue-400 mb-3">arXiv: {{ source.arxiv_id }}</p>
+                            <p class="text-gray-400 text-sm flex-grow mb-4">{{ source.summary.substring(0, 200) }}...</p>
+                            <a :href="source.pdf_url.startsWith('http') ? source.pdf_url : ('/papers/pdf/' + source.arxiv_id)" target="_blank" class="btn btn-secondary text-sm py-2 px-3 self-start"><i class="fas fa-file-pdf mr-2"></i>查看PDF</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Reports Page -->
+            <div v-if="currentPage === 'reports'">
+                <h2 class="text-3xl font-bold text-white mb-6">历史报告</h2>
+                <div class="card">
+                    <div v-if="isLoadingReports" class="p-8 text-center"><i class="fas fa-spinner fa-spin text-2xl"></i></div>
+                    <ul v-else-if="reports.length > 0" class="divide-y divide-gray-700">
+                        <li v-for="report in reports" class="p-4 flex justify-between items-center">
+                            <span class="text-lg"><i class="fas fa-file-pdf text-red-500 mr-3"></i>{{ report }}</span>
+                            <a :href="API_PREFIX + '/reports/' + report" target="_blank" class="btn btn-secondary text-sm py-2 px-3">下载</a>
+                        </li>
+                    </ul>
+                    <div v-else class="p-8 text-center text-gray-400">暂无历史报告。</div>
+                </div>
+            </div>
+
+            <!-- Workflow Page -->
+            <div v-if="currentPage === 'workflow'">
+                <h2 class="text-3xl font-bold text-white mb-6">任务中心</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="card p-6">
+                        <h3 class="text-xl font-semibold text-white mb-2">每日工作流</h3>
+                        <p class="text-gray-400 mb-4">手动触发系统获取、处理和分类当天的最新论文，并生成报告。</p>
+                        <button @click="runDailyWorkflow" :disabled="isWorkflowRunning" class="btn btn-primary">
+                            <i v-if="isWorkflowRunning" class="fas fa-spinner fa-spin mr-2"></i>
+                            {{ isWorkflowRunning ? '正在执行...' : '手动执行每日任务' }}
+                        </button>
+                    </div>
+                    <div class="card p-6">
+                        <h3 class="text-xl font-semibold text-white mb-2">清理冗余分类</h3>
+                        <p class="text-gray-400 mb-4">让AI分析现有分类体系，并提出合并建议以消除冗余。</p>
+                        <button @click="proposeCleanups" :disabled="isCleanupRunning" class="btn btn-secondary">
+                             <i v-if="isCleanupRunning" class="fas fa-spinner fa-spin mr-2"></i>
+                            {{ isCleanupRunning ? '分析中...' : '开始分析' }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings Page -->
+            <div v-if="currentPage === 'settings'">
+                <h2 class="text-3xl font-bold text-white mb-6">系统设置</h2>
+                <div class="card p-6">
+                    <div v-if="isLoadingSettings" class="text-center p-8"><i class="fas fa-spinner fa-spin text-3xl"></i></div>
+                    <form @submit.prevent="saveSettings" v-else>
+                        <div class="space-y-10">
+                            <!-- Global Parameters -->
+                            <div>
+                                <h3 class="text-xl font-semibold text-white mb-4 border-b border-gray-700 pb-2">全局运行参数</h3>
+                                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-4">
+                                    <!-- LLM and Reranker Settings -->
+                                    <div class="form-group">
+                                        <label for="default-llm" class="form-label">默认大语言模型 (全局)</label>
+                                        <select id="default-llm" v-model="globalSettings.OLLAMA_MODEL_NAME" class="form-select w-full mt-1">
+                                            <option v-for="model in availableModels" :key="model" :value="model">{{ model }}</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group flex items-center pt-6">
+                                        <input type="checkbox" id="thinking-mode" v-model="globalSettings.ENABLE_THINKING_MODE" class="h-4 w-4 rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
+                                        <label for="thinking-mode" class="ml-2 text-gray-300">启用 Qwen3 思考模式</label>
+                                    </div>
+                                    <div class="form-group"></div> <!-- Placeholder for alignment -->
+
+                                    <!-- Data Processing Settings -->
+                                    <div class="form-group"><label class="form-label">每日论文处理上限</label><input type="number" v-model.number="globalSettings.DAILY_PAPER_PROCESS_LIMIT" class="form-input w-full mt-1"></div>
+                                    <div class="form-group"><label class="form-label">PDF解析策略</label><select v-model="globalSettings.PDF_PARSING_STRATEGY" class="form-select w-full mt-1"><option value="monkey">MonkeyOCR (高精度)</option><option value="fast">Fast (低精度)</option></select></div>
+                                    <div class="form-group md:col-span-2"><label class="form-label">默认ArXiv领域 (逗号分隔)</label><input type="text" v-model="globalSettings.DEFAULT_ARXIV_DOMAINS_TEXT" class="form-input w-full mt-1"></div>
+                                    
+                                    <!-- RAG Settings -->
+                                    <div class="form-group"><label class="form-label">Top-K 检索候选数</label><input type="number" v-model.number="globalSettings.TOP_K_RESULTS" class="form-input w-full mt-1"></div>
+                                    <div class="form-group"><label class="form-label">最大相关论文数 (Rerank后)</label><input type="number" v-model.number="globalSettings.MAX_RELEVANT_PAPERS" class="form-input w-full mt-1"></div>
+                                    <div class="form-group"><label class="form-label">嵌入批处理大小</label><input type="number" v-model.number="globalSettings.EMBEDDING_BATCH_SIZE" class="form-input w-full mt-1"></div>
+                                    <div class="form-group"><label class="form-label">报告作者</label><input type="text" v-model="globalSettings.REPORT_AUTHOR" class="form-input w-full mt-1"></div>
+                                </div>
+                            </div>
+                            <!-- User Preferences -->
+                            <div>
+                                <h3 class="text-xl font-semibold text-white mb-4 border-b border-gray-700 pb-2">用户偏好：选择您感兴趣的研究类别</h3>
+                                <div class="space-y-4" v-if="Object.keys(categories).length > 0">
+                                    <div v-for="(domainData, domainName) in categories" :key="domainName">
+                                        <h4 class="font-bold text-lg text-blue-400">{{ domainName }}</h4>
+                                        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 mt-2">
+                                            <div v-for="(taskData, taskName) in domainData.tasks" :key="taskName" class="flex items-center">
+                                                <input type="checkbox" :id="domainName+taskName" :value="domainName+'__'+taskName" v-model="userPreferences" class="h-4 w-4 rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
+                                                <label :for="domainName+taskName" class="ml-2 text-gray-300">{{ taskName }}</label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                 <div v-else class="text-center text-gray-400 p-4">暂无分类信息。请先运行每日任务以自动建立分类体系。</div>
+                            </div>
+                        </div>
+                        <div class="mt-8 pt-6 border-t border-gray-700 flex justify-end">
+                            <button type="submit" :disabled="isSavingSettings" class="btn btn-primary">
+                                <i v-if="isSavingSettings" class="fas fa-spinner fa-spin mr-2"></i>
+                                {{ isSavingSettings ? '保存中...' : '保存所有设置' }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+        </main>
+
+        <!-- Cleanup Modal -->
+        <div v-if="showCleanupModal" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-40">
+            <div class="card w-full max-w-4xl max-h-[90vh] flex flex-col">
+                <div class="p-4 border-b border-gray-700 flex justify-between items-center">
+                    <h3 class="text-xl font-semibold text-white">分类合并建议</h3>
+                    <button @click="showCleanupModal = false" class="text-gray-400 hover:text-white">&times;</button>
+                </div>
+                <div class="p-6 overflow-y-auto">
+                    <p class="text-gray-400 mb-4">AI分析了您现有的分类，并提出以下合并建议以消除冗余。请取消勾选您不同意的建议。</p>
+                    <table class="w-full text-left">
+                        <thead><tr class="border-b border-gray-600"><th class="p-2">同意</th><th class="p-2">源分类</th><th></th><th class="p-2">目标分类</th><th class="p-2">原因</th></tr></thead>
+                        <tbody>
+                            <tr v-for="(p, index) in cleanupProposals" class="border-b border-gray-700">
+                                <td class="p-2"><input type="checkbox" v-model="p.agreed" class="h-4 w-4 rounded bg-gray-700 border-gray-600 text-blue-600"></td>
+                                <td class="p-2 font-mono text-sm">{{ p.from.domain }} > {{ p.from.task }}</td>
+                                <td class="text-center">&rarr;</td>
+                                <td class="p-2 font-mono text-sm font-bold">{{ p.to.domain }} > {{ p.to.task }}</td>
+                                <td class="p-2"><span class="bg-gray-600 text-xs font-semibold mr-2 px-2.5 py-0.5 rounded">{{ p.reason }}</span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="p-4 border-t border-gray-700 flex justify-end space-x-4">
+                    <button @click="showCleanupModal = false" class="btn btn-secondary">取消</button>
+                    <button @click="executeCleanups" :disabled="isExecutingCleanup" class="btn btn-primary">
+                        <i v-if="isExecutingCleanup" class="fas fa-spinner fa-spin mr-2"></i>
+                        {{ isExecutingCleanup ? '执行中...' : '确认执行合并' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Notification -->
+        <div v-if="toast.show" :class="toast.type" class="toast">
+            {{ toast.message }}
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script>
+    const { createApp, ref, onMounted, computed, watch } = Vue
+
+    createApp({
+        setup() {
+            const API_PREFIX = '/api';
+            const currentPage = ref('query');
+
+            // === State ===
+            const toast = ref({ show: false, message: '', type: 'success' });
+            
+            // Query Page
+            const queryText = ref('');
+            const isQuerying = ref(false);
+            const onlineSearchEnabled = ref(false);
+            const progressMessages = ref([]);
+            const queryResult = ref({ answer: '', sources: [] });
+            
+            // Shared State
+            const availableModels = ref([]);
+
+            // Reports Page
+            const reports = ref([]);
+            const isLoadingReports = ref(false);
+
+            // Workflow Page
+            const isWorkflowRunning = ref(false);
+            const isCleanupRunning = ref(false);
+            const showCleanupModal = ref(false);
+            const cleanupProposals = ref([]);
+            const isExecutingCleanup = ref(false);
+
+            // Settings Page
+            const isLoadingSettings = ref(true);
+            const isSavingSettings = ref(false);
+            const globalSettings = ref({ DEFAULT_ARXIV_DOMAINS_TEXT: '' });
+            const categories = ref({});
+            const userPreferences = ref([]);
+
+            // === Computed Properties ===
+            const parsedAnswer = computed(() => queryResult.value.answer ? marked.parse(queryResult.value.answer) : '');
+
+            // === Methods ===
+            const showToast = (message, type = 'success', duration = 3000) => {
+                toast.value = { show: true, message, type };
+                setTimeout(() => { toast.value.show = false; }, duration);
+            };
+
+            const switchPage = (page) => {
+                currentPage.value = page;
+            };
+
+            const fetchAvailableModels = async () => {
+                try {
+                    const response = await fetch(`${API_PREFIX}/settings/available-models`);
+                    if (!response.ok) throw new Error('获取模型列表失败');
+                    availableModels.value = await response.json();
+                } catch (error) {
+                    showToast(error.message, 'error');
+                }
+            };
+
+            const handleQuery = async () => {
+                if (!queryText.value.trim()) { return showToast('请输入您的问题！', 'error'); }
+                isQuerying.value = true;
+                progressMessages.value = [];
+                queryResult.value = { answer: '', sources: [] };
+                try {
+                    const response = await fetch(`${API_PREFIX}/query`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            query_text: queryText.value,
+                            online_search_enabled: onlineSearchEnabled.value
+                        })
+                    });
+                    if (!response.ok || !response.body) throw new Error('服务器响应错误');
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        buffer += decoder.decode(value, { stream: true });
+                        const boundary = '\n\n';
+                        let boundaryIndex;
+                        while ((boundaryIndex = buffer.indexOf(boundary)) >= 0) {
+                            const eventChunk = buffer.slice(0, boundaryIndex);
+                            buffer = buffer.slice(boundaryIndex + boundary.length);
+                            if (eventChunk.startsWith('data: ')) {
+                                const dataStr = eventChunk.substring(6);
+                                if(dataStr.trim()){
+                                    try {
+                                        const data = JSON.parse(dataStr);
+                                        if (data.type === 'progress') progressMessages.value.push(data.message);
+                                        else if (data.type === 'final') {
+                                            queryResult.value = data.data;
+                                            progressMessages.value = [];
+                                        } else if (data.type === 'error') throw new Error(data.message);
+                                    } catch(e) { console.error("Failed to parse stream data:", dataStr, e); }
+                                }
+                            }
+                        }
+                    }
+                } catch (error) { showToast(`查询失败: ${error.message}`, 'error'); } 
+                finally { isQuerying.value = false; }
+            };
+
+            const fetchReports = async () => {
+                isLoadingReports.value = true;
+                try {
+                    const response = await fetch(`${API_PREFIX}/reports`);
+                    if (!response.ok) throw new Error('获取报告列表失败');
+                    reports.value = await response.json();
+                } catch (error) { showToast(error.message, 'error'); }
+                finally { isLoadingReports.value = false; }
+            };
+
+            const runDailyWorkflow = async () => {
+                if (!confirm('确定要手动执行每日工作流吗？此操作可能耗时较长。')) return;
+                isWorkflowRunning.value = true;
+                try {
+                    const response = await fetch(`${API_PREFIX}/run/daily_workflow`, { method: 'POST' });
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.detail || '未知错误');
+                    showToast(`工作流执行成功！处理论文数: ${data.papers_processed}`, 'success');
+                    fetchReports(); // Refresh report list
+                } catch (error) { showToast(`执行失败: ${error.message}`, 'error'); }
+                finally { isWorkflowRunning.value = false; }
+            };
+
+            const proposeCleanups = async () => {
+                isCleanupRunning.value = true;
+                showCleanupModal.value = true;
+                cleanupProposals.value = [];
+                try {
+                    const response = await fetch(`${API_PREFIX}/categories/propose-merges`, { method: 'POST' });
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.detail || '分析失败');
+                    cleanupProposals.value = data.proposals.map(p => ({...p, agreed: true}));
+                    if(cleanupProposals.value.length === 0) {
+                        showToast('AI未发现任何可合并的冗余分类。', 'success');
+                        showCleanupModal.value = false;
+                    }
+                } catch (error) {
+                    showToast(`分析失败: ${error.message}`, 'error');
+                    showCleanupModal.value = false;
+                } finally { isCleanupRunning.value = false; }
+            };
+
+            const executeCleanups = async () => {
+                const confirmed_merges = cleanupProposals.value.filter(p => p.agreed);
+                if (confirmed_merges.length === 0) return showToast('您没有选择任何要执行的合并项。', 'error');
+                if (!confirm(`确定要执行 ${confirmed_merges.length} 项分类合并吗？此操作不可逆。`)) return;
+                isExecutingCleanup.value = true;
+                try {
+                    const response = await fetch(`${API_PREFIX}/categories/execute-merges`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ confirmed_merges })
+                    });
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.detail || '执行失败');
+                    showToast(result.message, 'success');
+                    showCleanupModal.value = false;
+                    fetchSettings(); // Refresh settings after merge
+                } catch (error) { showToast(`执行合并时发生错误: ${error.message}`, 'error'); }
+                finally { isExecutingCleanup.value = false; }
+            };
+
+            const fetchSettings = async () => {
+                isLoadingSettings.value = true;
+                try {
+                    // 同时获取所有设置和可用模型
+                    const [globalRes, prefsRes, catsRes, modelsRes] = await Promise.all([
+                        fetch(`${API_PREFIX}/settings/global`),
+                        fetch(`${API_PREFIX}/user/preferences`),
+                        fetch(`${API_PREFIX}/categories`),
+                        fetch(`${API_PREFIX}/settings/available-models`)
+                    ]);
+                    if (!globalRes.ok || !prefsRes.ok || !catsRes.ok || !modelsRes.ok) throw new Error('获取设置信息失败');
+                    
+                    const globalData = await globalRes.json();
+                    globalSettings.value = {
+                        ...globalData,
+                        DEFAULT_ARXIV_DOMAINS_TEXT: (globalData.DEFAULT_ARXIV_DOMAINS || []).join(', ')
+                    };
+
+                    categories.value = await catsRes.json();
+                    const prefsData = await prefsRes.json();
+                    userPreferences.value = (prefsData.selected_categories || []).map(p => `${p.domain}__${p.task}`);
+                    availableModels.value = await modelsRes.json();
+
+                } catch (error) { showToast(error.message, 'error'); }
+                finally { isLoadingSettings.value = false; }
+            };
+
+            const saveSettings = async () => {
+                isSavingSettings.value = true;
+                try {
+                    const globalPayload = {
+                        OLLAMA_MODEL_NAME: globalSettings.value.OLLAMA_MODEL_NAME,
+                        ENABLE_THINKING_MODE: globalSettings.value.ENABLE_THINKING_MODE,
+                        DAILY_PAPER_PROCESS_LIMIT: globalSettings.value.DAILY_PAPER_PROCESS_LIMIT,
+                        PDF_PARSING_STRATEGY: globalSettings.value.PDF_PARSING_STRATEGY,
+                        TOP_K_RESULTS: globalSettings.value.TOP_K_RESULTS,
+                        MAX_RELEVANT_PAPERS: globalSettings.value.MAX_RELEVANT_PAPERS,
+                        EMBEDDING_BATCH_SIZE: globalSettings.value.EMBEDDING_BATCH_SIZE,
+                        REPORT_AUTHOR: globalSettings.value.REPORT_AUTHOR,
+                        DEFAULT_ARXIV_DOMAINS: globalSettings.value.DEFAULT_ARXIV_DOMAINS_TEXT.split(',').map(s => s.trim()).filter(Boolean)
+                    };
+
+                    const prefsPayload = {
+                        selected_categories: userPreferences.value.map(val => {
+                            const [domain, task] = val.split('__');
+                            return { domain, task };
+                        })
+                    };
+
+                    const [globalRes, prefsRes] = await Promise.all([
+                        fetch(`${API_PREFIX}/settings/global`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(globalPayload) }),
+                        fetch(`${API_PREFIX}/user/preferences`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(prefsPayload) })
+                    ]);
+                    
+                    if (!globalRes.ok || !prefsRes.ok) {
+                        const errorG = await globalRes.text();
+                        const errorP = await prefsRes.text();
+                        throw new Error(`保存失败: 全局设置(${globalRes.status}) ${errorG}, 用户偏好(${prefsRes.status}) ${errorP}`);
+                    }
+                    showToast('所有设置已成功保存！新设置将在下次任务运行时生效。', 'success');
+                } catch (error) { showToast(`保存失败: ${error.message}`, 'error'); }
+                finally { isSavingSettings.value = false; }
+            };
+
+            onMounted(() => {
+                // 初始加载时，只需要获取一次模型列表
+                fetchAvailableModels();
+            });
+
+            watch(currentPage, (newPage) => {
+                if (newPage === 'reports' && reports.value.length === 0) fetchReports();
+                // 只有当用户点击设置页面时，才加载所有设置信息
+                if (newPage === 'settings') fetchSettings();
+            });
+
+            return {
+                API_PREFIX, currentPage, switchPage, toast,
+                queryText, isQuerying, progressMessages, queryResult, parsedAnswer, handleQuery, onlineSearchEnabled,
+                reports, isLoadingReports, fetchReports,
+                isWorkflowRunning, runDailyWorkflow,
+                isCleanupRunning, proposeCleanups, showCleanupModal, cleanupProposals, executeCleanups, isExecutingCleanup,
+                isLoadingSettings, isSavingSettings, globalSettings, categories, userPreferences, fetchSettings, saveSettings,
+                availableModels // 暴露给模板
+            };
+        }
+    }).mount('#app')
+    </script>
+</body>
+</html>
