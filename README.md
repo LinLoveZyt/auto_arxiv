@@ -1,9 +1,9 @@
-🚀 Auto-ARVIX 智能科研助手 (v2.0)
-Auto-ARVIX 是一款先进的、自动化的科研论文处理与智能问答系统。项目 v2.0 版本在原有基础上引入了 重排（Reranking）模型 与 动态 LLM 切换 功能，旨在通过结合最前沿的 AI 技术栈，从根本上改变研究人员与海量 arXiv 论文的交互方式。
+🚀 Auto-ARXIV 智能科研助手 (v1.0.1)
+Auto-ARXIV 是一款先进的、自动化的科研论文处理与智能问答系统。项目 v1.0.1 版本在原有基础上引入了 重排（Reranking）模型 与 动态 LLM 切换 功能，旨在通过结合最前沿的 AI 技术栈，从根本上改变研究人员与海量 arXiv 论文的交互方式。
 
 系统能够自动跟踪 arXiv 上的最新论文，进行深度解析、智能分类和高质量摘要，并将其构建成一个结构化的、持续增长的本地知识库。用户可以通过一个清爽的 Web 界面，使用自然语言与知识库交互，或动态调整系统的核心参数，以适应不同的研究需求。
 
-✨ v2.0 核心升级
+✨ v1.0.1 核心升级
 检索精度革命：引入 Reranker 模型
 
 在传统的向量检索（Recall）之后，新增了一个 重排（Rerank） 阶段。
@@ -50,7 +50,7 @@ AI 驱动分类: 利用 LLM 对每篇论文进行内容分析，将其自动分�
 问答过程采用流式响应（Server-Sent Events），实时展示 AI 的处理进度，提升用户体验。
 
 🏗️ 系统架构
-项目采用现代化、模块化的 Python 后端架构，由 FastAPI 和 Typer 驱动。v2.0 版本在 H-RAG 系统中增加了 Reranker 模块。
+项目采用现代化、模块化的 Python 后端架构，由 FastAPI 和 Typer 驱动。v1.0.1 版本在 H-RAG 系统中增加了 Reranker 模块。
 
 +---------------------+      +-------------------------+      +----------------------+
 |     Web UI (Vue.js) |----->|   FastAPI Backend API   |<---->|   CLI (Typer)        |
@@ -95,7 +95,7 @@ git clone <your-repo-url>
 cd <your-repo-directory>
 
 2. 安装依赖
-项目提供了一个便捷的安装脚本。它会自动创建 Conda 环境（环境名为 auto_arvix）并安装所有必需的库，包括 GPU 版本的 Pytorch 和 FAISS。
+项目提供了一个便捷的安装脚本。它会自动创建 Conda 环境（环境名为 auto_arxiv）并安装所有必需的库，包括 GPU 版本的 Pytorch 和 FAISS。
 
 ./run.sh install
 
@@ -105,7 +105,7 @@ cd <your-repo-directory>
 注意: Embedding 和 Reranker 模型会在首次运行时由 transformers 库自动下载，您只需确保网络连接通畅。
 
 # 拉取核心 LLM (请确保这两个模型已在本地Ollama中)
-ollama pull auto-arvix-unsloth-pro
+ollama pull auto-arxiv-unsloth-pro
 ollama pull qwen3:8b-q8_0
 
 确保 Ollama 服务正在后台运行。
@@ -131,7 +131,7 @@ ollama pull qwen3:8b-q8_0
 ./run.sh daily
 
 ⚙️ 通过 UI 进行配置
-v2.0 版本的一大亮点就是强大的 UI 配置能力。进入 Web 界面的 “系统设置” 页面，您可以轻松调整：
+v1.0.1 版本的一大亮点就是强大的 UI 配置能力。进入 Web 界面的 “系统设置” 页面，您可以轻松调整：
 
 全局运行参数: 控制每日处理论文的数量、PDF 解析的精度与速度、检索算法的深度等。
 

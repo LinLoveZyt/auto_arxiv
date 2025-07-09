@@ -257,6 +257,23 @@ def get_paper_details_by_id(arxiv_id: str) -> Optional[Dict[str, Any]]:
     finally:
         conn.close()
 
+def get_paper_summary_by_id(self, arxiv_id: str) -> Optional[str]:
+        """
+        Retrieves the generated summary for a specific paper by its arXiv ID.
+
+        Args:
+            arxiv_id: The arXiv ID of the paper.
+
+        Returns:
+            The generated summary string if the paper and summary exist, otherwise None.
+        """
+        query = "SELECT generated_summary FROM papers WHERE arxiv_id = ?"
+        result = self.execute_query(query, (arxiv_id,), fetch_one=True)
+        if result and result[0]:
+            return result[0]
+        logger.warning(f"No generated summary found for paper {arxiv_id} in the database.")
+        return None
+
 def check_if_today_papers_exist() -> bool:
     conn = get_db_connection()
     try:
