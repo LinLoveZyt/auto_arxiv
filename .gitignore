@@ -6,6 +6,3 @@ __pycache__/
 # Python virtual environment (optional)
 venv/
 .env/
-
-log.md
-prompt.md

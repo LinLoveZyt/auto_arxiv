@@ -4,7 +4,7 @@ import logging
 import json
 import time
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 from core import config as config_module
 from data_ingestion import arxiv_fetcher
@@ -230,122 +230,61 @@ def run_daily_workflow():
     }
 
 
-def _prepare_report_context(structured_chunks: List[Dict[str, Any]], hrag_manager: 'HRAGManager', arxiv_id: str) -> Dict[str, Any]:
-    """
-    Prepares a concise and informative context for the report generation agent.
-    This includes the paper's summary and a list of images/tables with their surrounding context.
-    """
-    # 1. 获取已生成的高质量摘要
-    paper_summary = hrag_manager.metadata_db.get_paper_summary_by_id(arxiv_id)
-    if not paper_summary:
-        logger.warning(f"Could not retrieve summary for {arxiv_id}, report quality may be affected.")
-        paper_summary = "Summary not available."
+def _generate_daily_report(processed_papers: List[Dict[str, Any]]):
+    """为处理过的论文生成包含统计信息的每日报告。"""
+    if not processed_papers:
+        logger.info("没有新处理的论文，不生成报告。")
+        return
 
-    # 2. 提取图片和表格，并捕获其上下文
-    media_with_context = []
-    text_chunks = [chunk['text'] for chunk in structured_chunks if chunk['type'] == 'text']
+    logger.info(f"准备为 {len(processed_papers)} 篇新论文生成每日报告...")
     
-    for i, chunk in enumerate(structured_chunks):
-        chunk_type = chunk.get('type')
-        if chunk_type in ['image', 'table']:
-            # 提取标题
-            caption = chunk.get('metadata', {}).get('caption', 'No caption available.')
-            # 提取文件路径 (针对图片)
-            image_path = chunk.get('metadata', {}).get('image_path', '')
+    statistics = {}
+    total_papers = len(processed_papers)
+    for paper in processed_papers:
+        classification = paper.get("classification_result", {})
+        domain = classification.get("domain", "Unclassified")
+        task = classification.get("task", "Unclassified")
+        
+        if domain not in statistics: statistics[domain] = {}
+        if task not in statistics[domain]: statistics[domain][task] = 0
+        statistics[domain][task] += 1
 
-            # 寻找上下文：向前和向后查找最近的文本块
-            context_before = ""
-            context_after = ""
+    report_jsons = []
+    for paper_data in processed_papers:
+        arxiv_id = paper_data["arxiv_id"].replace('/', '_')
+        structured_content_path = config_module.STRUCTURED_DATA_DIR / f"{arxiv_id}.json"
+        if not structured_content_path.exists(): 
+            logger.warning(f"找不到 {arxiv_id} 的结构化内容文件，跳过此论文的报告生成。")
+            continue
             
-            # 向前查找
-            for j in range(i - 1, -1, -1):
-                if structured_chunks[j].get('type') == 'text':
-                    context_before = structured_chunks[j].get('text', '')
-                    break
+        with open(structured_content_path, 'r', encoding='utf-8') as f:
+            structured_chunks = json.load(f)
             
-            # 向后查找
-            for j in range(i + 1, len(structured_chunks)):
-                if structured_chunks[j].get('type') == 'text':
-                    context_after = structured_chunks[j].get('text', '')
-                    break
-            
-            formatted_item = (
-                f"- Type: {chunk_type.capitalize()}\n"
-                f"  Caption: {caption}\n"
-            )
-            if image_path:
-                formatted_item += f"  Image Path: {image_path}\n"
-            
-            formatted_item += (
-                f"  Context Before: \"...{context_before[-200:]}\"\n"  # 最多截取前文的后200个字符
-                f"  Context After: \"{context_after[:200]}...\""      # 最多截取后文的前200个字符
-            )
-            media_with_context.append(formatted_item)
+        report_json_part = report_agent.generate_report_json_for_paper(
+            paper_meta=paper_data,
+            structured_chunks=structured_chunks
+        )
+        if report_json_part:
+            report_jsons.append(report_json_part)
 
-    media_summary_str = "\n\n".join(media_with_context) if media_with_context else "No images or tables found in the document."
-
-    return {
-        "paper_summary": paper_summary,
-        "media_summary_str": media_summary_str
+    if not report_jsons:
+        logger.error("所有论文的报告内容都生成失败，无法创建每日报告。")
+        return
+    
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    final_report_data = {
+        "report_title": f"arXiv Daily Focus Report",
+        "report_date": today_str,
+        "statistics": {"total_papers": total_papers, "breakdown": statistics},
+        "papers": report_jsons
     }
-
-def _generate_daily_report(hrag_manager: 'HRAGManager', successful_papers: List[Dict[str, Any]]):
-    """Generates and saves a daily report for all newly processed papers."""
-    if not successful_papers:
-        logger.info("No new papers to generate a report for.")
-        return
-
-    logger.info(f"Preparing to generate daily report for {len(successful_papers)} new papers...")
     
-    report_agent = ReportAgent()
-    report_data_list = []
-
-    for paper_data in successful_papers:
-        arxiv_id = paper_data['arxiv_id']
-        structured_data_path = paper_data['structured_data_path']
-
-        try:
-            with open(structured_data_path, 'r') as f:
-                structured_chunks = json.load(f)
-
-            # --- 这是核心修改 ---
-            # 准备一个精简、高效的上下文，而不是传递整个（可能被截断的）文件内容
-            report_context = _prepare_report_context(structured_chunks, hrag_manager, arxiv_id)
-            
-            # 将准备好的上下文传递给 report_agent
-            report_json = report_agent.generate_report_json_for_paper(
-                paper_meta=paper_data, 
-                report_context=report_context
-            )
-            # --------------------
-
-            if report_json:
-                report_data_list.append(report_json)
-
-        except FileNotFoundError:
-            logger.error(f"Structured data file not found for {arxiv_id} at {structured_data_path}. Skipping for report generation.")
-        except Exception as e:
-            logger.error(f"Failed to generate report section for {arxiv_id}: {e}", exc_info=True)
-
-    if not report_data_list:
-        logger.warning("No report data could be generated for any of the papers.")
-        return
-
-    # 保存 JSON 和 PDF 报告的逻辑保持不变
-    # ... (这部分逻辑和原来一样) ...
-    storage_path = current_config.get('storage_path', 'storage')
-    report_dir = os.path.join(storage_path, 'reports')
-    os.makedirs(report_dir, exist_ok=True)
-    
-    today_str = datetime.now().strftime('%Y-%m-%d')
-    json_report_path = os.path.join(report_dir, f"Daily_arXiv_Report_{today_str}.json")
+    report_filename_base = f"{config_module.DAILY_REPORT_PREFIX}_{today_str}"
+    json_report_path = config_module.REPORTS_DIR / f"{report_filename_base}.json"
+    pdf_report_path = config_module.REPORTS_DIR / f"{report_filename_base}.pdf"
 
     with open(json_report_path, 'w', encoding='utf-8') as f:
-        json.dump(report_data_list, f, indent=2, ensure_ascii=False)
-    logger.info(f"JSON report saved to: {json_report_path}")
-
-    try:
-        pdf_generator = PDFGenerator()
-        pdf_generator.generate_from_json(json_report_path)
-    except Exception as e:
-        logger.error(f"An unexpected error occurred during PDF generation: {e}", exc_info=True)
+        json.dump(final_report_data, f, ensure_ascii=False, indent=4)
+    logger.info(f"JSON报告已保存: {json_report_path}")
+    
+    pdf_generator.generate_daily_report_pdf(final_report_data, pdf_report_path, language='en')

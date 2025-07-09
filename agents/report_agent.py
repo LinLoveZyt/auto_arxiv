@@ -10,105 +10,134 @@ from core import config as config_module
 logger = logging.getLogger(__name__)
 
 
+# ▼▼▼ [核心修改] 模板被大幅强化，指令更明确 ▼▼▼
 REPORT_JSON_PROMPT_TEMPLATE = """
-You are an expert AI researcher. Your task is to generate a structured JSON analysis for a given research paper.
-The user will provide you with the paper's metadata, a high-quality summary, and a list of figures/tables with their surrounding textual context.
-Based ONLY on the provided information, generate a JSON object with the following schema.
+You are an expert AI research analyst. Your task is to generate a professional, analytical report in a structured JSON format. Your most critical task is to select the two most representative images based on a provided summary of figures.
 
-**JSON Schema:**
+**Input Information:**
+- **Paper Title:** "{paper_title}"
+- **Paper Authors:** {paper_authors}
+- **Paper Published Date:** "{published_date}"
+- **Paper ArXiv ID:** "{arxiv_id}"
+- **Paper Classification:** {classification_str}
+
+**A. Summary of Available Figures (with their exact file paths and original captions):**
+---
+{image_summary_str}
+---
+
+**B. Full Structured Content of the Paper (for context):**
+---
+{structured_content}
+---
+
+**Your Instructions (MUST be followed precisely):**
+1.  **Deep Analysis:** Based on all the provided text (section B), generate a deep, analytical summary covering:
+    -   **Problem Solved:** What specific problem in the field does this paper address?
+    -   **Originality & Innovation:** What is the core novel idea or method proposed?
+    -   **Methodology Comparison:** Briefly compare the proposed method to existing approaches.
+2.  **CRITICAL - Image Selection:**
+    -   Review the `caption` for each image in **section A**.
+    -   **Architecture Image:** Find the image whose caption best describes the overall system architecture, framework, or workflow. **Copy its exact `path`** and place it in the `architecture_image` field of the output.
+    -   **Performance Image:** Find the image whose caption best shows experimental results, performance comparisons, or ablation studies (this could be a chart, graph, or table). **Copy its exact `path`** and place it in the `performance_image` field.
+    -   If a suitable image for a category is not available after reviewing all captions, you **MUST** use the JSON value `null` for that field.
+3.  **JSON Output:** Your response must be a single, valid JSON object only, strictly adhering to the specified format. **Do not add comments or any other text outside the JSON structure.**
+
+**Output JSON Structure:**
+```json
 {{
-  "title": "Paper Title",
+  "title": "The full title of the paper",
   "authors": ["Author One", "Author Two"],
-  "arxiv_id": "e.g., 2401.12345v1",
-  "published_date": "YYYY-MM-DDTHH:MM:SSZ",
+  "arxiv_id": "The paper's arXiv ID",
+  "published_date": "The paper's publication date",
   "classification": {{
-    "domain": "e.g., Computer Vision",
-    "task": "e.g., Object Detection"
+      "domain": "The paper's domain",
+      "task": "The paper's task"
   }},
   "analysis": {{
-    "problem_solved": "A concise, one-sentence description of the core problem the paper addresses. Derived from the summary.",
-    "originality": "A one or two-sentence summary of the key innovation or unique contribution. What makes this paper novel? Derived from the summary.",
-    "method_comparison": "Briefly describe how this method compares to or improves upon previous work mentioned in the summary."
+    "problem_solved": "A concise summary of the core problem addressed by the paper.",
+    "originality": "A description of the paper's novel ideas and key innovations.",
+    "method_comparison": "A brief comparison of the proposed method with existing alternatives."
   }},
   "images": {{
-    "architecture_image": "The file path of the single image that best illustrates the overall system architecture, model structure, or workflow. Choose from the list below. If no single image is a clear winner, select the most comprehensive one.",
-    "performance_image": "The file path of the single image that best showcases the main results, performance comparisons, or key quantitative findings (e.g., a chart with metrics, a table with scores). Choose from the list below. It must be different from the architecture image."
+      "architecture_image": "images/figure1.jpg",
+      "performance_image": null
   }}
 }}
-
-**You must strictly follow these rules:**
-1.  Generate ONLY the JSON object, with no other text or explanations before or after.
-2.  Your entire response must be a single, valid JSON.
-3.  The values for "architecture_image" and "performance_image" MUST be chosen from the file paths provided in the "Figures/Tables Context" section below.
-4.  Do not invent new file paths. If no suitable image is found for a category, use an empty string "".
-
----
-**Provided Information:**
-
-**A. Paper Metadata:**
-- Title: {title}
-- Authors: {authors}
-- arXiv ID: {arxiv_id}
-- Published Date: {published_date}
-- Current Classification: {classification}
-
-**B. High-Quality Summary of the Paper:**
----
-{paper_summary}
----
-
-**C. Figures/Tables Context (for image selection):**
----
-{media_summary_str}
----
-
-**Based on all the information above, generate the JSON now.**
+```
 """
 
-def generate_report_json_for_paper(self, paper_meta: Dict[str, Any], report_context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Generates a structured JSON report for a single paper using a high-quality summary
-        and contextual media list.
+def generate_report_json_for_paper(
+    paper_meta: Dict[str, Any],
+    structured_chunks: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+    """
+    Generates a structured JSON report for a single paper, including analysis and image selection.
+    """
+    if not llm_client_module.llm_client:
+        logger.critical("LLM client is not initialized, cannot generate JSON for the report.")
+        return None
+        
+    title = paper_meta.get("title", "N/A")
+    arxiv_id = paper_meta.get("arxiv_id", "N/A")
+    logger.info(f"Starting to generate analytical report JSON for paper '{title[:50]}...'")
 
-        Args:
-            paper_meta: A dictionary containing the paper's metadata.
-            report_context: A dictionary containing the 'paper_summary' and 'media_summary_str'.
+    # 1. 预处理图片信息
+    image_summary_list = []
+    for chunk in structured_chunks:
+        if chunk.get("type") == "image" and chunk.get("img_path"):
+            caption_text = " ".join(chunk.get("img_caption", [])).strip()
+            if caption_text:
+                # 关键修改：存储的路径现在是相对路径
+                relative_img_path = f"images/{chunk['img_path'].split('/')[-1]}"
+                image_summary_list.append({
+                    "path": relative_img_path,
+                    "caption": caption_text
+                })
 
-        Returns:
-            A dictionary representing the structured JSON report, or None on failure.
-        """
-        paper_title_short = paper_meta.get('title', 'Unknown Paper')[:50] + '...'
-        logger.info(f"Starting to generate analytical report JSON for paper '{paper_title_short}'")
+    image_summary_str = json.dumps(image_summary_list, indent=2, ensure_ascii=False) if image_summary_list else "No images with captions found in the paper."
 
-        try:
-            # 数据已经由上游工作流准备好，我们直接使用
-            paper_summary = report_context.get('paper_summary', 'Not available.')
-            media_summary_str = report_context.get('media_summary_str', 'Not available.')
+    # 2. 准备其他Prompt变量
+    content_str = json.dumps(structured_chunks, indent=2, ensure_ascii=False)
 
-            # 注意：不再需要检查内容长度和截断的逻辑，因为输入已经很精简
+    current_config = config_module.get_current_config()
+    MAX_CONTENT_CHARS = current_config.get('MAX_CONTENT_FOR_REPORT', 15000)
 
-            final_prompt = REPORT_JSON_PROMPT_TEMPLATE.format(
-                title=paper_meta.get('title', ''),
-                authors=', '.join(paper_meta.get('authors', [])),
-                arxiv_id=paper_meta.get('arxiv_id', ''),
-                published_date=paper_meta.get('published_date', ''),
-                classification=paper_meta.get('classification', {}),
-                paper_summary=paper_summary,
-                media_summary_str=media_summary_str
-            )
+    if len(content_str) > MAX_CONTENT_CHARS:
+        original_len = len(content_str)
+        content_str = content_str[:MAX_CONTENT_CHARS] + "\n... (content truncated for brevity)"
+        logger.warning(f"Paper content for {arxiv_id} is too long ({original_len} chars). Truncated to {MAX_CONTENT_CHARS} for report generation prompt.")
 
-            report_json = self.llm_client.generate_json(
-                prompt=final_prompt,
-                system_message="You are a helpful AI assistant that specializes in scientific paper analysis and JSON generation."
-            )
+    classification_data = paper_meta.get('classification_result', {"domain": "N/A", "task": "N/A"})
 
-            if report_json:
-                logger.info(f"✅ Successfully generated analytical report JSON for paper '{paper_title_short}'.")
-                return report_json
-            else:
-                logger.error(f"❌ Failed to generate or parse JSON for paper '{paper_title_short}' after all retries.")
-                return None
+    final_prompt = REPORT_JSON_PROMPT_TEMPLATE.format(
+        paper_title=title,
+        paper_authors=json.dumps(paper_meta.get("authors", []), ensure_ascii=False),
+        published_date=str(paper_meta.get("published_date", "N/A")),
+        arxiv_id=arxiv_id,
+        classification_str=json.dumps(classification_data, ensure_ascii=False),
+        image_summary_str=image_summary_str,
+        structured_content=content_str
+    )
 
-        except Exception as e:
-            logger.error(f"An unexpected error occurred in generate_report_json_for_paper for '{paper_title_short}': {e}", exc_info=True)
-            return None
+    system_prompt = "You are an assistant that only outputs strictly formatted JSON."
+
+    report_json = llm_client_module.llm_client.generate_json(
+        prompt=final_prompt,
+        system_prompt=system_prompt
+    )
+
+    if not report_json:
+        logger.error(f"LLM failed to generate valid report JSON for paper '{title[:50]}...'.")
+        return None
+
+    if 'analysis' not in report_json or 'classification' not in report_json:
+        logger.error(f"The JSON returned by the LLM is missing required fields (analysis/classification): {report_json}")
+        return None
+        
+    if 'images' not in report_json or not isinstance(report_json.get('images'), dict):
+        logger.warning(f"The JSON returned by the LLM is missing a valid 'images' dictionary. Report will not have images. JSON: {report_json}")
+        report_json['images'] = {}
+
+    logger.info(f"✅ Successfully generated analytical report JSON for paper '{title[:50]}...'.")
+    return report_json
