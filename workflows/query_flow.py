@@ -85,7 +85,7 @@ def _agent_filter_online_summaries(query: str, papers: List[Dict[str, Any]], max
     # 输入信息保持不变
     papers_info_str = "\n---\n".join([ f"ID: {p['arxiv_id']}\nTitle: {p['title']}\nSummary: {p.get('summary', 'N/A')[:1000]}" for p in papers ])
     
-    # 使用极度简化的、命令式的Prompt
+    # 关键修改：使用极度简化的、命令式的Prompt
     prompt = f"""
     **User Query:**
     "{query}"
@@ -107,7 +107,7 @@ def _agent_filter_online_summaries(query: str, papers: List[Dict[str, Any]], max
     ```
     """
     
-    # 再次强化系统角色
+    # 关键修改：再次强化系统角色
     system_prompt = "You are a machine that only outputs JSON formatted according to the user's specified structure. Do not add any other text."
 
     result = llm_client_module.llm_client.generate_json(prompt, system_prompt)
@@ -153,6 +153,9 @@ def _agent_synthesize_answer(query_text: str, context: str, source_type: str) ->
 
 
 
+# workflows/query_flow.py
+
+# workflows/query_flow.py
 
 class QueryWorkflow:
     def __init__(self):
@@ -287,7 +290,7 @@ class QueryWorkflow:
             
         yield {"type": "progress", "message": f"已找到 {len(final_papers)} 篇相关论文，正在生成最终回答..."}
         
-        # 调用时不再传递 model_name
+        # 关键修改：调用时不再传递 model_name
         final_answer = _agent_synthesize_answer(query_text, context_str, source_type)
         
         if not final_answer:

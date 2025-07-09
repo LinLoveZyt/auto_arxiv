@@ -1,11 +1,10 @@
 # hrag/hrag_manager.py
-  
 import logging
 import json
 import torch # 导入torch以使用其cuda功能
 from typing import List, Dict, Any, Optional
-from core import config as config_module
 
+from core import config as config_module
 from hrag import metadata_db, vector_db
 from hrag import embedding_engine as embedding_engine_module 
 from agents import ingestion_agent, summarization_agent
@@ -20,7 +19,7 @@ class HRAGManager:
             cls._instance = super(HRAGManager, cls).__new__(cls)
         return cls._instance
         
-    
+    # hrag/hrag_manager.py
 
     def process_and_add_paper(
         self,

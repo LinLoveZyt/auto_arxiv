@@ -29,7 +29,7 @@ DEFAULT_CONFIG = {
     # LLM and Embedding
     "AVAILABLE_LLM_MODELS": ["auto-arvix-unsloth-pro", "qwen3:8b-q8_0"],
     "OLLAMA_MODEL_NAME": "auto-arvix-unsloth-pro",
-    "OLLAMA_TIMEOUT": 120, # 全局LLM请求超时（秒）
+    "OLLAMA_TIMEOUT": 300, # 全局LLM请求超时（秒）
     "LLM_JSON_RETRY_ATTEMPTS": 3,
     "ENABLE_THINKING_MODE": True,
 

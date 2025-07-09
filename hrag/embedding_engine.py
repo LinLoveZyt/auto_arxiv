@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
 
-
+# ▼▼▼ [修改] 改变导入方式 ▼▼▼
 from core import config as config_module
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ class EmbeddingEngine:
         if self._initialized: return
         logger.info("正在初始化嵌入引擎 (Embedding Engine)...")
         
-        
+        # ▼▼▼ [修改] 在函数内部获取配置 ▼▼▼
         current_config = config_module.get_current_config()
         model_name = current_config['EMBEDDING_MODEL_NAME']
         device = current_config['EMBEDDING_DEVICE']

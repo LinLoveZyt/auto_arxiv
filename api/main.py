@@ -225,7 +225,30 @@ async def propose_category_merges():
         raise HTTPException(status_code=500, detail="服务器内部错误。")
 
 
+@app.get("/api/settings/global", response_model=Dict[str, Any], tags=["Configuration"])
+async def get_global_settings():
+    """获取当前所有可动态配置的全局参数。"""
+    return config_module.get_current_config()
 
+@app.post("/api/settings/global", response_model=Dict[str, str], tags=["Configuration"])
+async def update_global_settings(payload: Dict[str, Any] = Body(...)):
+    """更新全局参数，并将其写入覆盖文件。"""
+    try:
+        current_override = {}
+        if config_module.CONFIG_OVERRIDE_PATH.exists():
+            with open(config_module.CONFIG_OVERRIDE_PATH, 'r', encoding='utf-8') as f:
+                current_override = json.load(f)
+        
+        current_override.update(payload)
+
+        with open(config_module.CONFIG_OVERRIDE_PATH, 'w', encoding='utf-8') as f:
+            json.dump(current_override, f, indent=4)
+        
+        logger.info(f"全局配置已成功更新，内容: {payload}")
+        return {"message": "全局配置更新成功。新设置将在下一次任务运行时生效。"}
+    except Exception as e:
+        logger.error(f"更新全局配置文件时失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="写入配置文件时发生内部错误。")
 
 
 @app.get("/api/settings/global", response_model=Dict[str, Any], tags=["Configuration"])
@@ -313,7 +336,7 @@ async def execute_category_merges(payload: Dict[str, Any] = Body(...)):
                 del temp_categories[domain]["tasks"][task]
                 if not temp_categories[domain]["tasks"]:
                      del temp_categories[domain]
-       
+        # vvv [修改] vvv
         with open(config_module.CATEGORIES_JSON_PATH, 'w', encoding='utf-8') as f:
             json.dump(temp_categories, f, indent=4, ensure_ascii=False)
         logger.info("categories.json 文件已清理。")
@@ -335,7 +358,8 @@ async def execute_category_merges(payload: Dict[str, Any] = Body(...)):
             with open(config_module.USER_PREFERENCES_PATH, 'w', encoding='utf-8') as f:
                 json.dump(user_prefs, f, indent=4, ensure_ascii=False)
             logger.info("user_preferences.json 文件已对齐。")
-     
+        # ^^^ [修改] ^^^
+
         message = f"分类清理完成，成功处理 {successful_updates} / {len(confirmed_merges)} 条合并规则。"
         logger.info(message)
         return {"message": message}

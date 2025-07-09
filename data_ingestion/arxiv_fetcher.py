@@ -5,7 +5,7 @@ import arxiv
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 
-
+# ▼▼▼ [修改] 改变导入方式 ▼▼▼
 from core import config as config_module
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,8 @@ def parse_arxiv_result(result: arxiv.Result) -> Dict[str, Any]:
         "primary_category": result.primary_category
     }
 
+
+
 def fetch_daily_papers(
     domains: List[str],
     max_results: int = 100
@@ -33,6 +35,7 @@ def fetch_daily_papers(
         return []
         
     query = " OR ".join([f"cat:{domain}" for domain in domains])
+    # 保持按提交日期排序，以获取最新的条目
     search = arxiv.Search(
         query=query,
         max_results=max_results,
@@ -40,18 +43,19 @@ def fetch_daily_papers(
     )
     
     start_date_utc = datetime.now(timezone.utc) - timedelta(days=3)
-    logger.info(f"Fetching up to {max_results} latest papers submitted after {start_date_utc.strftime('%Y-%m-%d %H:%M:%S')} (UTC) for domains '{', '.join(domains)}'...")
+    logger.info(f"Fetching up to {max_results} latest papers published after {start_date_utc.strftime('%Y-%m-%d %H:%M:%S')} (UTC) for domains '{', '.join(domains)}'...")
     
     results = []
     counter = 0
     try:
         for result in search.results():
             counter += 1
-            if counter % 10 == 0:
-                logger.info(f"  [DEBUG] Checking paper #{counter}: arxiv:{result.get_short_id()}, updated_date: {result.updated.strftime('%Y-%m-%d %H:%M:%S')}")
             
-            if result.updated >= start_date_utc:
+            # ▼▼▼ 核心修改：使用 .published 替代 .updated ▼▼▼
+            # 这确保我们只筛选真正在指定时间窗口内首次发表的论文
+            if result.published >= start_date_utc:
                 results.append(parse_arxiv_result(result))
+            # ▲▲▲ 核心修改结束 ▲▲▲
 
     except arxiv.UnexpectedEmptyPageError:
         logger.info("Reached the end of the result stream (encountered an empty page), which is normal.")
@@ -65,7 +69,7 @@ def fetch_daily_papers(
 
 def search_arxiv(
     query: str,
-    
+    # ▼▼▼ [修改] 修正默认参数问题 ▼▼▼
     max_results: Optional[int] = None,
     sort_by: arxiv.SortCriterion = arxiv.SortCriterion.Relevance
 ) -> List[Dict[str, Any]]:
@@ -76,7 +80,7 @@ def search_arxiv(
         logger.warning("No query string provided, cannot perform online search.")
         return []
 
-    
+    # ▼▼▼ [修改] 在函数内部获取配置 ▼▼▼
     if max_results is None:
         max_results = config_module.get_current_config()['USER_QUERY_FETCH_LIMIT']
 

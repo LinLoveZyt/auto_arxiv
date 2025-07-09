@@ -13,6 +13,7 @@ from api.main import app as fastapi_app
 from workflows import daily_flow
 from hrag import metadata_db
 
+# ▼▼▼ [修改] 在脚本加载时获取一次配置，供Typer使用 ▼▼▼
 cli_config = config_module.get_current_config()
 
 # 创建一个Typer应用实例

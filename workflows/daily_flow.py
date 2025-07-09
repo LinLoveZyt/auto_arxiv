@@ -173,7 +173,7 @@ def run_daily_workflow():
             logger.warning(f"对齐论文 {arxiv_id} 的分类失败，已跳过。")
             continue
 
-     
+        # vvv [修改] 使用正确的键名并更新分类体系 vvv
         final_domain = aligned_result["final_domain"]
         final_task = aligned_result["final_task"]
         
@@ -184,7 +184,7 @@ def run_daily_workflow():
             "domain": final_domain,
             "task": final_task
         }
-  
+        # ^^^ [修改] ^^^
         
         paper_category = (final_classification['domain'], final_classification['task'])
         if paper_category in pref_set:

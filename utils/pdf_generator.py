@@ -9,7 +9,7 @@ import shutil
 from pathlib import Path
 from typing import Dict, Any, List
 
-
+# ▼▼▼ [修改] 改变导入方式 ▼▼▼
 from core import config as config_module
 
 logger = logging.getLogger(__name__)

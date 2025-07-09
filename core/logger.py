@@ -76,3 +76,24 @@ def setup_logging():
     logging.info("日志系统初始化完成，将同时输出到控制台和文件。")
     logging.info(f"日志文件路径: {log_file_path}")
 
+# --- 如何在其他模块中使用 ---
+# 在其他任何文件中，你只需要这样写：
+#
+# import logging
+#
+# # 创建一个以当前模块名命名的logger实例
+# # 这使得日志输出时可以清晰地看到日志来源
+# logger = logging.getLogger(__name__)
+#
+# def some_function():
+#     logger.info("这是一条信息日志。")
+#     logger.warning("这是一条警告日志。")
+#     try:
+#         1 / 0
+#     except Exception as e:
+#         logger.error(f"发生了一个错误: {e}", exc_info=True)
+#
+# if __name__ == '__main__':
+#     # 只需要在主程序入口调用一次 setup_logging()
+#     setup_logging()
+#     some_function()

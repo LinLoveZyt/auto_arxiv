@@ -47,13 +47,13 @@ def process_papers_list(
                 successfully_processed_papers.append(paper_data)
                 continue
 
-           
+            # ▼▼▼ [修改] 将解析策略作为参数传递 ▼▼▼
             path_info = pdf_processor.process_paper(paper_data, strategy=pdf_parsing_strategy)
             if not path_info:
                 logger.error(f"处理论文 {arxiv_id} 的PDF失败，跳过此论文。")
                 continue
             
-            
+            # ... 函数的其余部分保持不变 ...
             full_paper_data = {**paper_data, **path_info}
             paper_db_id = metadata_db.add_paper(full_paper_data)
             if paper_db_id is None:

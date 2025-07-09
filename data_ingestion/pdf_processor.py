@@ -128,7 +128,7 @@ def _parse_with_monkey_ocr(pdf_path: Path, arxiv_id: str) -> Optional[Path]:
             shutil.rmtree(monkey_output_dir)
         logger.info(f"--- Finished PDF processing with MonkeyOCR for {arxiv_id} ---")
 
-
+# ▼▼▼ [新增] 使用 unstructured 的 'fast' 策略进行解析的函数 ▼▼▼
 def _parse_with_unstructured(pdf_path: Path, arxiv_id: str) -> Optional[Path]:
     """
     使用 unstructured 库和 'fast' 策略来解析PDF。
@@ -185,17 +185,12 @@ def _parse_with_unstructured(pdf_path: Path, arxiv_id: str) -> Optional[Path]:
             json_path.unlink(missing_ok=True)
         return None
 
+# data_ingestion/pdf_processor.py
 
 def process_paper(paper_data: Dict[str, Any], strategy: str) -> Optional[Dict[str, Path]]:
     """
     处理单篇论文：下载PDF并根据指定策略进行解析。
-
-    Args:
-        paper_data (Dict[str, Any]): 包含论文元数据的字典。
-        strategy (str): 要使用的解析策略 ('monkey' 或 'fast')。
-
-    Returns:
-        Optional[Dict[str, Path]]: 包含PDF和JSON路径的字典，如果失败则返回None。
+    新增了当 'monkey' 策略失败时，自动降级到 'fast' 策略的容错机制。
     """
     arxiv_id, pdf_url = paper_data.get("arxiv_id"), paper_data.get("pdf_url")
     if not arxiv_id or not pdf_url:
@@ -213,8 +208,21 @@ def process_paper(paper_data: Dict[str, Any], strategy: str) -> Optional[Dict[st
     json_path = None
     # 2. 根据策略选择解析器
     if strategy == 'monkey':
-        logger.info(f"Using 'monkey' strategy to parse PDF: {local_pdf_path.name}")
+        logger.info(f"Using primary 'monkey' strategy to parse PDF: {local_pdf_path.name}")
         json_path = _parse_with_monkey_ocr(local_pdf_path, arxiv_id)
+        
+        # ▼▼▼ 核心优化：自动降级逻辑 ▼▼▼
+        if not json_path:
+            logger.warning(f"'monkey' strategy failed for {arxiv_id}. Automatically falling back to 'fast' strategy.")
+            # 确保在重试前清理可能产生的失败文件
+            safe_arxiv_id = arxiv_id.replace('/', '_')
+            failed_json_path = config.STRUCTURED_DATA_DIR / f"{safe_arxiv_id}.json"
+            if failed_json_path.exists():
+                failed_json_path.unlink(missing_ok=True)
+                
+            json_path = _parse_with_unstructured(local_pdf_path, arxiv_id)
+        # ▲▲▲ 优化结束 ▲▲▲
+
     elif strategy == 'fast':
         logger.info(f"Using 'fast' strategy to parse PDF: {local_pdf_path.name}")
         json_path = _parse_with_unstructured(local_pdf_path, arxiv_id)
@@ -224,7 +232,7 @@ def process_paper(paper_data: Dict[str, Any], strategy: str) -> Optional[Dict[st
 
     # 3. 检查解析结果
     if not json_path:
-        logger.error(f"Processing failed: Could not parse PDF for {arxiv_id} using strategy '{strategy}'.")
+        logger.error(f"Processing failed: Could not parse PDF for {arxiv_id} using any available strategy.")
         return None
         
     logger.info(f"--- Paper {arxiv_id} processed successfully ---")

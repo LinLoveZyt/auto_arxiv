@@ -35,7 +35,7 @@ class LLMClient:
         self.config = config_module.get_current_config()
         self.retry_attempts = self.config['LLM_JSON_RETRY_ATTEMPTS']
         
-        # 实例化一个带超时的客户端
+        # 关键修改：实例化一个带超时的客户端
         self.client = ollama.Client(
             # host 参数可以根据需要配置，这里使用默认
             # host='http://127.0.0.1:11434', 
