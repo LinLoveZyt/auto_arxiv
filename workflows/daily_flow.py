@@ -44,77 +44,8 @@ def _get_user_preferences() -> List[Dict[str, str]]:
         return []
 
 
-def _run_cold_start_population():
-    """
-    冷启动函数。通过循环N次，每次都从过去几年内随机选择一个年月，
-    并从该月中随机获取一篇高质量论文，以建立一个多样化且现代的分类体系。
-    """
-    current_config = config_module.get_current_config()
-    logger.info("--- [冷启动机制触发] ---")
-    logger.info("数据库中论文过少，开始逐篇随机采样以建立分类体系。")
 
-    papers_to_process = []
-    seen_ids = set()
-    target_count = current_config['COLD_START_PAPER_COUNT']
-    years_window = current_config['COLD_START_YEARS_WINDOW']
-    domains_query = " OR ".join([f"cat:{domain}" for domain in current_config['COLD_START_DOMAINS']])
-    
-    now = datetime.now()
-    all_possible_months = []
-    for year in range(now.year - years_window + 1, now.year + 1):
-        end_month = now.month if year == now.year else 12
-        for month in range(1, end_month + 1):
-            all_possible_months.append((year, month))
-            
-    if not all_possible_months:
-        logger.warning("冷启动：未能生成任何可供采样的年月范围。")
-        return
 
-    attempts = 0
-    max_attempts = target_count * 10 
-
-    while len(papers_to_process) < target_count and attempts < max_attempts:
-        attempts += 1
-        
-        year, month = random.choice(all_possible_months)
-        
-        start_date = datetime(year, month, 1)
-        if month == 12:
-            end_date = datetime(year + 1, 1, 1) - timedelta(days=1)
-        else:
-            end_date = datetime(year, month + 1, 1) - timedelta(days=1)
-        
-        date_query = f"submittedDate:[{start_date.strftime('%Y%m%d')} TO {end_date.strftime('%Y%m%d')}]"
-        full_query = f"({domains_query}) AND {date_query}"
-        
-        candidate_papers = arxiv_fetcher.search_arxiv(
-            query=full_query,
-            max_results=20, 
-            sort_by=arxiv.SortCriterion.Relevance
-        )
-
-        if not candidate_papers:
-            logger.info(f"在 {year}-{month} 未找到任何论文，尝试下一个随机年月。")
-            continue
-
-        random.shuffle(candidate_papers)
-        for paper in candidate_papers:
-            arxiv_id = paper['arxiv_id']
-            if arxiv_id not in seen_ids and not metadata_db.check_if_paper_exists(arxiv_id):
-                logger.info(f"冷启动：成功采样到新论文 {arxiv_id} (来自 {year}-{month})。 "
-                            f"当前进度: {len(papers_to_process) + 1}/{target_count}")
-                papers_to_process.append(paper)
-                seen_ids.add(arxiv_id)
-                break
-    
-    if not papers_to_process:
-        logger.warning("冷启动：在指定次数的尝试中未能获取到任何新的、符合条件的论文。")
-        return
-        
-    logger.info(f"冷启动采样完成，将处理 {len(papers_to_process)} 篇新论文。")
-
-    process_papers_list(papers_to_process, pdf_parsing_strategy=current_config['PDF_PARSING_STRATEGY'])
-    logger.info("--- [冷启动机制完成] ---")
 
 
 
@@ -133,8 +64,6 @@ def run_daily_workflow():
     current_config = config_module.get_current_config()
     logger.info(f"当前任务使用的每日处理上限为: {current_config['DAILY_PAPER_PROCESS_LIMIT']}")
 
-    if metadata_db.get_total_paper_count() < current_config["COLD_START_PAPER_COUNT"]:
-        _run_cold_start_population()
 
     user_preferences = _get_user_preferences()
     if not user_preferences:
@@ -303,3 +232,93 @@ def _generate_daily_report(processed_papers: List[Dict[str, Any]]):
     report_language = 'zh' if "qwen3" in config_module.get_current_config()['OLLAMA_MODEL_NAME'].lower() else 'en'
     logger.info(f"Generating PDF report in '{report_language}' language.")
     pdf_generator.generate_daily_report_pdf(final_report_data, pdf_report_path, language=report_language)
+
+def run_category_collection_workflow() -> Dict[str, Any]:
+    """
+    执行一个轻量级的类别收集工作流。
+    该流程仅从arXiv获取论文，使用LLM进行分类以丰富本地的`categories.json`文件，
+    但不会对论文进行下载、解析或入库，以实现快速的分类体系扩充。
+    """
+    current_config = config_module.get_current_config()
+    logger.info("--- [手动类别收集工作流启动] ---")
+
+    target_count = current_config['CATEGORY_COLLECTION_COUNT']
+    years_window = current_config['CATEGORY_COLLECTION_YEARS_WINDOW']
+    domains_query = " OR ".join([f"cat:{domain}" for domain in current_config['CATEGORY_COLLECTION_DOMAINS']])
+    
+    logger.info(f"目标：收集 {target_count} 篇论文的分类信息。")
+
+    now = datetime.now()
+    all_possible_months = []
+    for year in range(now.year - years_window + 1, now.year + 1):
+        end_month = now.month if year == now.year else 12
+        for month in range(1, end_month + 1):
+            all_possible_months.append((year, month))
+            
+    if not all_possible_months:
+        logger.warning("类别收集：未能生成任何可供采样的年月范围。")
+        return {"message": "未能生成任何可供采样的年月范围。", "categories_added": 0}
+
+    papers_to_classify = []
+    seen_ids = set()
+    attempts = 0
+    max_attempts = target_count * 15 # 增加尝试次数以提高成功率
+
+    while len(papers_to_classify) < target_count and attempts < max_attempts:
+        attempts += 1
+        year, month = random.choice(all_possible_months)
+        start_date = datetime(year, month, 1)
+        end_date = (start_date + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+        
+        date_query = f"submittedDate:[{start_date.strftime('%Y%m%d')} TO {end_date.strftime('%Y%m%d')}]"
+        full_query = f"({domains_query}) AND {date_query}"
+        
+        # 每次只获取少量候选，避免单次API调用过多
+        candidate_papers = arxiv_fetcher.search_arxiv(
+            query=full_query, max_results=20, sort_by=arxiv.SortCriterion.Relevance
+        )
+
+        if not candidate_papers: continue
+
+        random.shuffle(candidate_papers)
+        for paper in candidate_papers:
+            arxiv_id = paper['arxiv_id']
+            # 我们只关心我们还不知道分类的论文，但这里简化为检查论文是否存在
+            if arxiv_id not in seen_ids and not metadata_db.check_if_paper_exists(arxiv_id):
+                logger.info(f"类别收集：成功采样到新论文 {arxiv_id} (来自 {year}-{month})。 "
+                            f"当前进度: {len(papers_to_classify) + 1}/{target_count}")
+                papers_to_classify.append(paper)
+                seen_ids.add(arxiv_id)
+                if len(papers_to_classify) >= target_count:
+                    break
+        if len(papers_to_classify) >= target_count:
+            break
+    
+    if not papers_to_classify:
+        logger.warning("类别收集：在指定次数的尝试中未能获取到任何新的、符合条件的论文。")
+        return {"message": "未能获取到任何新的论文。", "categories_added": 0}
+        
+    logger.info(f"采样完成，将对 {len(papers_to_classify)} 篇新论文进行纯分类处理...")
+
+    new_categories_count = 0
+    known_categories = ingestion_agent.get_known_categories()
+
+    for paper in papers_to_classify:
+        # 这是核心的简化：只进行分类，不入库
+        raw_classification = ingestion_agent.classify_paper(paper['title'], paper['summary'])
+        if not raw_classification:
+            logger.warning(f"无法对论文 {paper['arxiv_id']} 进行分类，已跳过。")
+            continue
+        
+        # 可选：进行分类对齐以保持体系整洁
+        aligned_result = ingestion_agent.align_classification(raw_classification, known_categories)
+        if aligned_result:
+             # _update_known_categories 已在 classify_paper 和 align_classification 内部被调用
+             new_categories_count += 1
+             # 更新内存中的 known_categories 以供下一次对齐使用
+             ingestion_agent._update_known_categories(aligned_result["final_domain"], aligned_result["final_task"])
+
+
+    message = f"类别收集完成！成功处理了 {len(papers_to_classify)} 篇论文，扩充了分类体系。"
+    logger.info(f"--- [手动类别收集工作流结束]: {message} ---")
+    return {"message": message, "categories_added": new_categories_count}

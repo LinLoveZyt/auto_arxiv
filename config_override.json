@@ -1,0 +1,30 @@
+{
+    "OLLAMA_MODEL_NAME": "auto-arxiv-qwen3-16k",
+    "OLLAMA_TIMEOUT": 300,
+    "LLM_JSON_RETRY_ATTEMPTS": 3,
+    "EMBEDDING_MODEL_NAME": "Qwen3-Embedding-0.6B",
+    "EMBEDDING_DEVICE": "auto",
+    "DAILY_PAPER_PROCESS_LIMIT": 30,
+    "USER_QUERY_FETCH_LIMIT": 1,
+    "DEFAULT_ARXIV_DOMAINS": [
+        "cs.AI",
+        "cs.CV",
+        "cs.LG"
+    ],
+    "PDF_PARSING_STRATEGY": "monkey",
+    "TOP_K_RESULTS": 50,
+    "MAX_RELEVANT_PAPERS": 10,
+    "COLD_START_PAPER_COUNT": 10,
+    "COLD_START_DOMAINS": [
+        "cs.AI",
+        "cs.CV"
+    ],
+    "COLD_START_YEARS_WINDOW": 5,
+    "REPORT_AUTHOR": "Auto-ARVIX Project",
+    "API_HOST": "0.0.0.0",
+    "API_PORT": 5002,
+    "ONLINE_SEARCH_PAPER_LIMIT": 10,
+    "ENABLE_THINKING_MODE": true,
+    "EMBEDDING_BATCH_SIZE": 64,
+    "CATEGORY_COLLECTION_COUNT": 20
+}

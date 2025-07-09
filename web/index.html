@@ -130,6 +130,14 @@
                         </button>
                     </div>
                     <div class="card p-6">
+                        <h3 class="text-xl font-semibold text-white mb-2">类别收集</h3>
+                        <p class="text-gray-400 mb-4">快速从大量论文中学习分类信息，以扩充和完善系统的分类体系，此过程不入库论文。</p>
+                        <button @click="runCategoryCollection" :disabled="isCategoryRunning" class="btn btn-primary">
+                            <i v-if="isCategoryRunning" class="fas fa-spinner fa-spin mr-2"></i>
+                            {{ isCategoryRunning ? '收集中...' : '开始收集' }}
+                        </button>
+                    </div>
+                    <div class="card p-6">
                         <h3 class="text-xl font-semibold text-white mb-2">清理冗余分类</h3>
                         <p class="text-gray-400 mb-4">让AI分析现有分类体系，并提出合并建议以消除冗余。</p>
                         <button @click="proposeCleanups" :disabled="isCleanupRunning" class="btn btn-secondary">
@@ -166,6 +174,7 @@
 
                                     <!-- Data Processing Settings -->
                                     <div class="form-group"><label class="form-label">每日论文处理上限</label><input type="number" v-model.number="globalSettings.DAILY_PAPER_PROCESS_LIMIT" class="form-input w-full mt-1"></div>
+                                    <div class="form-group"><label class="form-label">类别收集数量</label><input type="number" v-model.number="globalSettings.CATEGORY_COLLECTION_COUNT" class="form-input w-full mt-1"></div>
                                     <div class="form-group"><label class="form-label">PDF解析策略</label><select v-model="globalSettings.PDF_PARSING_STRATEGY" class="form-select w-full mt-1"><option value="monkey">MonkeyOCR (高精度)</option><option value="fast">Fast (低精度)</option></select></div>
                                     <div class="form-group md:col-span-2"><label class="form-label">默认ArXiv领域 (逗号分隔)</label><input type="text" v-model="globalSettings.DEFAULT_ARXIV_DOMAINS_TEXT" class="form-input w-full mt-1"></div>
                                     
@@ -271,6 +280,7 @@
 
             // Workflow Page
             const isWorkflowRunning = ref(false);
+            const isCategoryRunning = ref(false);
             const isCleanupRunning = ref(false);
             const showCleanupModal = ref(false);
             const cleanupProposals = ref([]);
@@ -279,7 +289,9 @@
             // Settings Page
             const isLoadingSettings = ref(true);
             const isSavingSettings = ref(false);
-            const globalSettings = ref({ DEFAULT_ARXIV_DOMAINS_TEXT: '' });
+            const globalSettings = ref({ DEFAULT_ARXIV_DOMAINS_TEXT: '',
+                                        CATEGORY_COLLECTION_COUNT: 15
+                                    });
             const categories = ref({});
             const userPreferences = ref([]);
 
@@ -375,6 +387,22 @@
                 finally { isWorkflowRunning.value = false; }
             };
 
+            const runCategoryCollection = async () => {
+                if (!confirm('确定要开始类别收集吗？此过程会调用LLM，可能需要一些时间。')) return;
+                isCategoryRunning.value = true;
+                try {
+                    const response = await fetch(`${API_PREFIX}/run/category_collection`, { method: 'POST' });
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.detail || '未知错误');
+                    showToast(data.message, 'success', 5000); // 显示更长时间
+                    fetchSettings(); // 重新加载设置以刷新分类列表
+                } catch (error) {
+                    showToast(`类别收集失败: ${error.message}`, 'error');
+                } finally {
+                    isCategoryRunning.value = false;
+                }
+            };
+
             const proposeCleanups = async () => {
                 isCleanupRunning.value = true;
                 showCleanupModal.value = true;
@@ -448,6 +476,7 @@
                         OLLAMA_MODEL_NAME: globalSettings.value.OLLAMA_MODEL_NAME,
                         ENABLE_THINKING_MODE: globalSettings.value.ENABLE_THINKING_MODE,
                         DAILY_PAPER_PROCESS_LIMIT: globalSettings.value.DAILY_PAPER_PROCESS_LIMIT,
+                        CATEGORY_COLLECTION_COUNT: globalSettings.value.CATEGORY_COLLECTION_COUNT,
                         PDF_PARSING_STRATEGY: globalSettings.value.PDF_PARSING_STRATEGY,
                         TOP_K_RESULTS: globalSettings.value.TOP_K_RESULTS,
                         MAX_RELEVANT_PAPERS: globalSettings.value.MAX_RELEVANT_PAPERS,
@@ -494,6 +523,7 @@
                 queryText, isQuerying, progressMessages, queryResult, parsedAnswer, handleQuery, onlineSearchEnabled,
                 reports, isLoadingReports, fetchReports,
                 isWorkflowRunning, runDailyWorkflow,
+                isCategoryRunning, runCategoryCollection,
                 isCleanupRunning, proposeCleanups, showCleanupModal, cleanupProposals, executeCleanups, isExecutingCleanup,
                 isLoadingSettings, isSavingSettings, globalSettings, categories, userPreferences, fetchSettings, saveSettings,
                 availableModels // 暴露给模板

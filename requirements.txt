@@ -54,5 +54,7 @@ httpx
 typer[all]
 # web-ui
 gradio
-
+# 在线搜索
 googlesearch-python
+# 冗余清理使用的聚类算法
+scikit-learn

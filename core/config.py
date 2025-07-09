@@ -39,6 +39,9 @@ DEFAULT_CONFIG = {
     # Reranker
     "RERANKER_MODEL_NAME": "Qwen/Qwen3-Reranker-0.6B",
     
+    # Category Cleanup
+    "CATEGORY_CLUSTER_THRESHOLD": 0.3, # 合并分类时的距离阈值，越小要求越相似
+
     # Agent Settings
     "MAX_TASKS_FOR_PROMPT": 50, # 分类合并建议时，发送给LLM的最大任务数
     "EMBEDDING_BATCH_SIZE": 64, 
@@ -54,10 +57,11 @@ DEFAULT_CONFIG = {
     "TOP_K_RESULTS": 15,
     "MAX_RELEVANT_PAPERS": 5,
     
-    # Cold Start
-    "COLD_START_PAPER_COUNT": 10,
-    "COLD_START_DOMAINS": ["cs.AI", "cs.CV"],
-    "COLD_START_YEARS_WINDOW": 5,
+    # 类别收集配置
+    # Category Collection
+    "CATEGORY_COLLECTION_COUNT": 15, # 每次手动触发时，用于学习分类的论文数量
+    "CATEGORY_COLLECTION_DOMAINS": ["cs.AI", "cs.CV", "cs.LG", "cs.CL", "cs.RO"],
+    "CATEGORY_COLLECTION_YEARS_WINDOW": 5,
     
     # Report
     "REPORT_AUTHOR": "Auto-ARVIX Project",

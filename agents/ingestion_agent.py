@@ -3,8 +3,13 @@ import logging
 import json
 from typing import Dict, Any, Optional
 import random
+from sklearn.cluster import AgglomerativeClustering
+import numpy as np
+
 from core import config as config_module
 from core import llm_client as llm_client_module
+from hrag import metadata_db, embedding_engine
+
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +34,64 @@ PROMPT_TEMPLATE = """
     }}
     ```
     """
+
+
+
+# 用于在一个已确认的冗余簇中，选举出最规范的名称
+ARBITRATION_PROMPT_TEMPLATE = """
+You are a world-class AI research classification taxonomist. From the following list of synonymous research categories, your task is to select the single best one to serve as the canonical name.
+
+List of Synonymous Categories:
+{category_list_str}
+Instructions:
+
+The canonical name should be the most standard, widely-accepted, professional, and complete term. Avoid abbreviations or colloquialisms.
+
+Your response MUST be a single JSON object containing the chosen domain and task.
+
+Output JSON Structure:
+
+JSON
+
+{{
+  "canonical_form": {{
+    "domain": "The chosen standard domain name",
+    "task": "The chosen standard task name"
+  }}
+}}
+"""
+
+SUBSET_PROMPT_TEMPLATE = """
+You are an expert AI research taxonomist. Your task is to analyze a list of research categories and identify one or more groups of true synonyms within it.
+
+**List of Categories to Analyze:**
+---
+{category_list_str}
+---
+
+**Instructions:**
+1.  Read the entire list to understand the topics.
+2.  Identify groups (subsets) where all members are **semantically equivalent**. They must be true synonyms, abbreviations, or different phrasings for the exact same concept.
+3.  A category should only appear in one group.
+4.  If a category has no synonyms in the list, do not include it in any group.
+5.  Your output MUST be a single JSON object containing a list of these groups. If no synonym groups are found, return an empty list.
+
+**Output JSON Structure:**
+```json
+{{
+  "synonym_groups": [
+    [
+      {{"domain": "CV", "task": "Object Detection"}},
+      {{"domain": "Computer Vision", "task": "Object Detection"}}
+    ],
+    [
+      {{"domain": "NLP", "task": "Text Generation"}},
+      {{"domain": "Natural Language Processing", "task": "Text Generation"}}
+    ]
+  ]
+}}
+"""
+
 
 def get_known_categories() -> Dict:
     """从JSON文件加载已知的分类体系。"""
@@ -222,88 +285,104 @@ You are a world-class AI research classification taxonomist. Your goal is to con
 """
 
 
-# agents/ingestion_agent.py
 
 def propose_category_merges() -> Optional[Dict[str, Any]]:
     """
-    使用LLM分析现有分类，提出合并建议，并过滤掉无效建议。
-    新增了对大量分类进行采样的逻辑以防止性能问题。
+    使用“聚类-识别子集-仲裁”的三阶段先进算法，提出分类合并建议。
+    V3版 (用户启发版):
+    1.  宽容地聚类，得到包含大量相关项的“候选簇”。
+    2.  [新增] 让LLM审视每个大候选簇，并从中提取一个或多个纯净的“同义词子集”。
+    3.  对每个提取出的高质量子集，再由LLM仲裁选出规范名称。
     """
-    if not llm_client_module.llm_client:
-        logger.critical("LLM client is not initialized, cannot propose category merges.")
+    if not all([llm_client_module.llm_client, embedding_engine.embedding_engine]):
+        logger.critical("LLM client or Embedding Engine not initialized, cannot propose merges.")
         return None
 
-    logger.info("启动分类合并建议Agent...")
-    known_categories = get_known_categories()
+    logger.info("启动新版分类合并建议Agent v3 (聚类-子集发现-仲裁)...")
     
-    total_tasks = sum(len(data.get("tasks", {})) for data in known_categories.values())
-    
-    if total_tasks < 2:
-        logger.info("分类数量不足 (少于2个任务)，无需进行合并建议。")
+    # 1. 从数据库获取所有分类并进行向量化 (与V2版相同)
+    all_db_categories = metadata_db.get_all_domains_and_tasks()
+    flat_categories = []
+    for domain, tasks in all_db_categories.items():
+        for task in tasks:
+            flat_categories.append({"domain": domain, "task": task})
+
+    if len(flat_categories) < 2:
+        logger.info("数据库中的分类总数不足 (少于2个)，无需进行合并建议。")
         return {"proposals": []}
 
-    # 关键修改：从全局配置中获取上限值
-    current_config = config_module.get_current_config()
-    MAX_TASKS_FOR_PROMPT = current_config.get('MAX_TASKS_FOR_PROMPT', 80)
-    
-    if total_tasks > MAX_TASKS_FOR_PROMPT:
-        logger.warning(f"分类任务总数 ({total_tasks}) 超过了建议上限 ({MAX_TASKS_FOR_PROMPT})。将随机采样一部分分类进行分析，以避免性能问题。")
-        
-        all_tasks_flat = []
-        for domain, data in known_categories.items():
-            for task in data.get("tasks", {}).keys():
-                all_tasks_flat.append((domain, task))
-        
-        sampled_tasks_flat = random.sample(all_tasks_flat, MAX_TASKS_FOR_PROMPT)
-        
-        sampled_categories = {}
-        for domain, task in sampled_tasks_flat:
-            if domain not in sampled_categories:
-                sampled_categories[domain] = {"tasks": {}}
-            sampled_categories[domain]["tasks"][task] = {}
-        
-        known_categories_for_prompt = sampled_categories
-        logger.info(f"已随机采样 {MAX_TASKS_FOR_PROMPT} 个任务用于本次合并建议。")
-    else:
-        known_categories_for_prompt = known_categories
-
-    known_categories_simple = {
-        domain: list(data.get("tasks", {}).keys())
-        for domain, data in known_categories_for_prompt.items()
-    }
-    
-    prompt = MERGE_PROMPT_TEMPLATE.format(
-        known_categories_str=json.dumps(known_categories_simple, indent=2, ensure_ascii=False)
-    )
-    system_prompt = "You are a precise, JSON-only output assistant specializing in taxonomy management."
-
-    merge_proposal_result = llm_client_module.llm_client.generate_json(
-        prompt=prompt,
-        system_prompt=system_prompt
-    )
-
-    if not merge_proposal_result or "proposals" not in merge_proposal_result:
-        logger.error("合并建议Agent未能生成有效的JSON。")
+    logger.info(f"正在为从数据库获取的全部 {len(flat_categories)} 个分类生成嵌入向量...")
+    descriptions = [f"Research Domain: {cat['domain']}, Specific Task: {cat['task']}" for cat in flat_categories]
+    try:
+        vectors = embedding_engine.embedding_engine.encode(descriptions)
+    except Exception as e:
+        logger.error(f"为分类生成嵌入向量时失败: {e}", exc_info=True)
         return None
 
-    raw_proposals = merge_proposal_result.get("proposals", [])
-    valid_proposals = []
-    for prop in raw_proposals:
-        if not isinstance(prop, dict) or "from" not in prop or "to" not in prop:
-            continue
-        
-        from_cat = prop.get("from")
-        to_cat = prop.get("to")
-        
-        if not isinstance(from_cat, dict) or not isinstance(to_cat, dict):
-            continue
+    # 2. 使用层次聚类，得到大的“候选簇” (与V2版相同)
+    current_config = config_module.get_current_config()
+    threshold = current_config.get("CATEGORY_CLUSTER_THRESHOLD", 0.3)
+    logger.info(f"开始对向量进行层次聚类，距离阈值(Threshold)为: {threshold}")
+    
+    clustering = AgglomerativeClustering(n_clusters=None, distance_threshold=threshold, metric='cosine', linkage='average')
+    labels = clustering.fit_predict(vectors)
 
-        if from_cat != to_cat:
-            valid_proposals.append(prop)
-        else:
-            logger.warning(f"已过滤掉一条无效的自我合并建议: {from_cat}")
+    clusters = {}
+    for i, label in enumerate(labels):
+        if label not in clusters: clusters[label] = []
+        clusters[label].append(flat_categories[i])
+    
+    candidate_clusters = [c for c in clusters.values() if len(c) > 1]
+    logger.info(f"聚类完成，发现 {len(candidate_clusters)} 个大的候选簇。")
+
+    # 3. 遍历大簇，让LLM提取纯净的“同义词子集”并进行仲裁
+    final_proposals = []
+    system_prompt_json = "You are a precise, JSON-only output assistant."
+
+    for i, cluster in enumerate(candidate_clusters):
+        logger.info(f"--- 正在处理候选簇 {i+1}/{len(candidate_clusters)} ---")
+        
+        # 步骤 3a: LLM 识别同义词子集
+        cluster_json_str = json.dumps(cluster, indent=2, ensure_ascii=False)
+        subset_prompt = SUBSET_PROMPT_TEMPLATE.format(category_list_str=cluster_json_str)
+        subset_result = llm_client_module.llm_client.generate_json(subset_prompt, system_prompt_json)
+
+        if not subset_result or "synonym_groups" not in subset_result or not subset_result["synonym_groups"]:
+            logger.info("LLM 在此大簇中未发现任何同义词子集，已跳过。")
+            continue
+        
+        synonym_groups = subset_result["synonym_groups"]
+        logger.info(f"LLM 发现了 {len(synonym_groups)} 个同义词子集，开始逐一进行仲裁...")
+
+        # 步骤 3b: 对每个子集进行仲裁
+        for j, group in enumerate(synonym_groups):
+            if not isinstance(group, list) or len(group) < 2: continue # 跳过无效或单个成员的组
             
-    merge_proposal_result["proposals"] = valid_proposals
+            logger.info(f"  -- 正在仲裁子集 {j+1}/{len(synonym_groups)} --")
+            group_str_list = [f'- {g["domain"]} > {g["task"]}' for g in group]
+            arbitration_prompt = ARBITRATION_PROMPT_TEMPLATE.format(category_list_str="\n".join(group_str_list))
+            arbitration_result = llm_client_module.llm_client.generate_json(arbitration_prompt, system_prompt_json)
 
-    logger.info(f"✅ 合并建议Agent完成，提出了 {len(valid_proposals)} 条有效建议。")
-    return merge_proposal_result
+            if not arbitration_result or "canonical_form" not in arbitration_result:
+                logger.error(f"LLM 仲裁失败，无法为子集选举出规范名称。已跳过。子集内容: {group_str_list}")
+                continue
+
+            canonical_form = arbitration_result["canonical_form"]
+            if canonical_form not in group:
+                logger.warning(f"LLM选举出了一个不在子集内的规范名称: {canonical_form}。已跳过此子集。")
+                continue
+
+            logger.info(f"  选举完成！规范名称为: {canonical_form['domain']} > {canonical_form['task']}")
+
+            # 步骤 3c: 为当前子集生成合并计划
+            for category in group:
+                if category != canonical_form:
+                    proposal = {
+                        "from": category,
+                        "to": canonical_form,
+                        "reason": "AI-Identified Synonym Group"
+                    }
+                    final_proposals.append(proposal)
+
+    logger.info(f"✅ 合并建议流程完成，共生成 {len(final_proposals)} 条高质量、无冲突的合并建议。")
+    return {"proposals": final_proposals}

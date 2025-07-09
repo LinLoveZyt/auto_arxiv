@@ -79,6 +79,17 @@ async def trigger_daily_run():
     result = await run_in_threadpool(daily_flow.run_daily_workflow)
     return schemas.DailyRunResponse(**result)
 
+@app.post("/api/run/category_collection", response_model=schemas.GeneralStatusResponse, tags=["Workflows"])
+async def trigger_category_collection():
+    """
+    手动触发一次轻量级的类别收集任务。
+    该任务会从arXiv获取论文，仅进行AI分类以扩充系统知识，但不会下载PDF或入库。
+    """
+    logger.info("--- [API] 接收到手动类别收集请求 ---")
+    # 注意：我们复用 schemas.GeneralStatusResponse 作为响应模型，因为它足够通用
+    # 我们调用新创建的工作流函数
+    result = await run_in_threadpool(daily_flow.run_category_collection_workflow)
+    return schemas.GeneralStatusResponse(message=result.get("message", "操作完成。"))
 
 
 @app.get("/api/settings/available-models", response_model=List[str], tags=["Configuration"])
