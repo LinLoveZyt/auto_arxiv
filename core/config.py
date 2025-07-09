@@ -27,7 +27,7 @@ DAILY_REPORT_PREFIX = "Daily_arXiv_Report"
 # 我们将所有可动态配置的参数放入一个字典中，方便管理和覆盖
 DEFAULT_CONFIG = {
     # LLM and Embedding
-    "AVAILABLE_LLM_MODELS": ["auto-arvix-unsloth-pro", "qwen3:8b-q8_0"],
+    "AVAILABLE_LLM_MODELS": ["auto-arvix-unsloth-pro", "auto-arxiv-qwen3-16k"],
     "OLLAMA_MODEL_NAME": "auto-arvix-unsloth-pro",
     "OLLAMA_TIMEOUT": 300, # 全局LLM请求超时（秒）
     "LLM_JSON_RETRY_ATTEMPTS": 3,

@@ -70,13 +70,22 @@ class LLMClient:
         target_model = current_config['OLLAMA_MODEL_NAME']
         
         options = {'temperature': 0.7, 'num_ctx': 4096}
-        if "qwen" in target_model.lower():
-            options.update({'temperature': 0.6, 'top_p': 0.95})
 
+        # ▼▼▼ [核心修改] 为不同模型应用不同策略 ▼▼▼
+        is_qwen_model = "qwen" in target_model.lower()
+
+        if is_qwen_model:
+            options.update({'temperature': 0.6, 'top_p': 0.95})
+            # 为qwen模型加强中文输出指令
+            if "chinese" not in system_prompt.lower() and "中文" not in system_prompt:
+                system_prompt += "\nYou must respond in Chinese."
+        
         final_prompt = prompt
-        if "qwen" in target_model.lower() and not current_config.get("ENABLE_THINKING_MODE", True):
+        # 如果是qwen模型，并且没有开启思考模式，则注入指令
+        if is_qwen_model and not current_config.get("ENABLE_THINKING_MODE", True):
             final_prompt += "\n/no_think"
             logger.info("'/no_think' command injected for Qwen model to disable thinking.")
+        # ▲▲▲ 修改结束 ▲▲▲
 
         try:
             # 使用带超时的客户端实例
@@ -94,7 +103,7 @@ class LLMClient:
             
             logger.info(f"LLM Response from '{target_model}': took {duration:.2f}s, generated {tokens} tokens ({tps:.2f} t/s).")
 
-            if "qwen" in target_model.lower() and current_config.get("ENABLE_THINKING_MODE", True):
+            if is_qwen_model and current_config.get("ENABLE_THINKING_MODE", True):
                 thinking_content, final_content = self._parse_qwen3_output(content)
                 if thinking_content:
                     logger.info(f"[Qwen3 Thinking]: {thinking_content[:500]}...")
@@ -106,6 +115,7 @@ class LLMClient:
             logger.error(f"Error during LLM call with model {target_model}: {e}")
             return None
 
+            
     def generate_json(self, prompt: str, system_prompt: str = "You are a helpful JSON assistant.") -> Optional[Dict[str, Any]]:
         for attempt in range(self.retry_attempts):
             current_config = config_module.get_current_config()

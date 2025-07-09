@@ -250,9 +250,20 @@ def _generate_daily_report(processed_papers: List[Dict[str, Any]]):
         statistics[domain][task] += 1
 
     report_jsons = []
-    for paper_data in processed_papers:
-        arxiv_id = paper_data["arxiv_id"].replace('/', '_')
-        structured_content_path = config_module.STRUCTURED_DATA_DIR / f"{arxiv_id}.json"
+    # ▼▼▼ [核心修改] 循环时获取完整的、包含AI摘要的论文数据 ▼▼▼
+    for paper_info in processed_papers:
+        arxiv_id = paper_info["arxiv_id"]
+        
+        # 从数据库获取包含AI生成摘要的完整论文详情
+        paper_details = metadata_db.get_paper_details_by_id(arxiv_id)
+        if not paper_details:
+            logger.warning(f"无法从数据库获取论文 {arxiv_id} 的详细信息，跳过此论文的报告生成。")
+            continue
+            
+        # paper_details 现在包含了 'generated_summary' 字段
+        
+        safe_arxiv_id = arxiv_id.replace('/', '_')
+        structured_content_path = config_module.STRUCTURED_DATA_DIR / f"{safe_arxiv_id}.json"
         if not structured_content_path.exists(): 
             logger.warning(f"找不到 {arxiv_id} 的结构化内容文件，跳过此论文的报告生成。")
             continue
@@ -261,11 +272,12 @@ def _generate_daily_report(processed_papers: List[Dict[str, Any]]):
             structured_chunks = json.load(f)
             
         report_json_part = report_agent.generate_report_json_for_paper(
-            paper_meta=paper_data,
+            paper_meta=paper_details, # 传递完整的、更新后的论文元数据
             structured_chunks=structured_chunks
         )
         if report_json_part:
             report_jsons.append(report_json_part)
+    # ▲▲▲ 修改结束 ▲▲▲
 
     if not report_jsons:
         logger.error("所有论文的报告内容都生成失败，无法创建每日报告。")
@@ -287,4 +299,7 @@ def _generate_daily_report(processed_papers: List[Dict[str, Any]]):
         json.dump(final_report_data, f, ensure_ascii=False, indent=4)
     logger.info(f"JSON报告已保存: {json_report_path}")
     
-    pdf_generator.generate_daily_report_pdf(final_report_data, pdf_report_path, language='en')
+    # 动态判断报告语言
+    report_language = 'zh' if "qwen3" in config_module.get_current_config()['OLLAMA_MODEL_NAME'].lower() else 'en'
+    logger.info(f"Generating PDF report in '{report_language}' language.")
+    pdf_generator.generate_daily_report_pdf(final_report_data, pdf_report_path, language=report_language)

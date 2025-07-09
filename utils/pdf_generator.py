@@ -214,6 +214,8 @@ def generate_daily_report_pdf(report_data: Dict[str, Any], output_path: Path, la
         logger.error("Command 'xelatex' not found. Please ensure a full LaTeX distribution is installed. PDF generation is skipped.")
         return
 
+    # ▼▼▼ [核心修改] 引入编译成功标志位 ▼▼▼
+    compilation_successful = True
     for i in range(2):
         logger.info(f"--- Starting LaTeX compilation pass {i+1}/2 ---")
         try:
@@ -222,14 +224,19 @@ def generate_daily_report_pdf(report_data: Dict[str, Any], output_path: Path, la
                 cwd=output_dir,
                 capture_output=True, text=True, encoding='utf-8', errors='ignore'
             )
+            # 只在最后一次编译后检查返回码
             if i == 1 and process.returncode != 0:
                 logger.error(f"LaTeX compilation failed after 2 passes. See log file for details: {output_dir / (base_filename + '.log')}")
+                compilation_successful = False # 标记编译失败
         except Exception as e:
             logger.critical(f"A critical error occurred during LaTeX compilation: {e}")
-            return
+            compilation_successful = False
+            break # 出现严重异常，直接跳出循环
     
     final_pdf_path = output_dir / f"{base_filename}.pdf"
-    if final_pdf_path.exists():
+    
+    # ▼▼▼ [核心修改] 仅在编译成功且文件存在时，才宣告成功并清理文件 ▼▼▼
+    if final_pdf_path.exists() and compilation_successful:
         logger.info(f"🎉 Successfully generated PDF report: {final_pdf_path}")
         for ext in ['.aux', '.log', '.out', '.toc', '.tex']:
             aux_file = output_dir / f"{base_filename}{ext}"
