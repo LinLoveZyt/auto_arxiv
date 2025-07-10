@@ -77,3 +77,13 @@ class DailyRunResponse(GeneralStatusResponse):
 class CustomFetchResponse(GeneralStatusResponse):
     papers_found: int = Field(description="根据条件找到的论文数量。")
     papers: List[Dict[str, Any]] = Field(description="找到的论文信息列表。")
+
+class DailyRunRequest(BaseModel):
+    """每日工作流接口 (/run/daily_workflow) 的请求体。"""
+    research_plan: Optional[str] = Field(
+        None,
+        description="用户本次临时的调研计划，用于辅助AI筛选论文。",
+        examples=["我最近在关注多模态大模型在自动驾驶领域的应用..."]
+    )
+    start_date: Optional[date] = Field(None, description="搜索范围的开始日期 (YYYY-MM-DD)。")
+    end_date: Optional[date] = Field(None, description="搜索范围的结束日期 (YYYY-MM-DD)。")

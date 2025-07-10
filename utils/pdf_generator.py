@@ -40,7 +40,7 @@ def escape_latex_text(text: str) -> str:
 
 def format_paper_latex(paper_data: Dict[str, Any], language: str = 'en') -> str:
     """
-    Formats a single paper's JSON data into a LaTeX code block, including selected images and classification.
+    将单篇论文的JSON数据格式化为LaTeX代码块，包含图片、分类和收录理由。
     """
     
     title = escape_latex_text(paper_data.get('title', 'N/A'))
@@ -56,16 +56,23 @@ def format_paper_latex(paper_data: Dict[str, Any], language: str = 'en') -> str:
     problem = escape_latex_text(analysis.get('problem_solved', 'N/A'))
     originality = escape_latex_text(analysis.get('originality', 'N/A'))
     comparison = escape_latex_text(analysis.get('method_comparison', 'N/A'))
+    
+    # [核心修改] 获取收录理由
+    justification = escape_latex_text(paper_data.get('selection_justification', ''))
 
     headers = {
-        'en': {'problem': 'Problem Solved', 'originality': 'Originality & Innovation', 'comparison': 'Method Comparison', 'fig_arch': 'Figure: Model Architecture/Workflow', 'fig_perf': 'Figure: Performance Comparison', 'category': 'Category'},
-        'zh': {'problem': '解决的问题', 'originality': '独创性与创新点', 'comparison': '方法对比', 'fig_arch': '图：模型架构/工作流程', 'fig_perf': '图：性能对比', 'category': '分类'}
+        'en': {'problem': 'Problem Solved', 'originality': 'Originality & Innovation', 'comparison': 'Method Comparison', 'fig_arch': 'Figure: Model Architecture/Workflow', 'fig_perf': 'Figure: Performance Comparison', 'category': 'Category', 'reason': 'Reason for Inclusion'},
+        'zh': {'problem': '解决的问题', 'originality': '独创性与创新点', 'comparison': '方法对比', 'fig_arch': '图：模型架构/工作流程', 'fig_perf': '图：性能对比', 'category': '分类', 'reason': '收录理由'}
     }
     lang_headers = headers.get(language, headers['en'])
 
     latex_str = f"\\section*{{{title}}}\n"
     latex_str += f"\\subsection*{{{lang_headers['category']}: {domain} / {task} --- arXiv: {arxiv_id} --- Published: {published_date}}}\n\\vspace{{-1em}}\\hrulefill\n\n"
     
+    # [核心修改] 如果有收录理由，则将其添加到报告中
+    if justification:
+        latex_str += f"\\subsubsection*{{{lang_headers['reason']}}}\n\\textcolor{{blue}}{{{justification}}}\n\n"
+
     latex_str += f"\\subsubsection*{{{lang_headers['problem']}}}\n{problem}\n\n"
     latex_str += f"\\subsubsection*{{{lang_headers['originality']}}}\n{originality}\n\n"
     latex_str += f"\\subsubsection*{{{lang_headers['comparison']}}}\n{comparison}\n\n"
@@ -74,7 +81,6 @@ def format_paper_latex(paper_data: Dict[str, Any], language: str = 'en') -> str:
     arch_img_path_str = images_info.get('architecture_image')
     perf_img_path_str = images_info.get('performance_image')
 
-    # ▼▼▼ [修改] 使用正确的配置路径 ▼▼▼
     base_image_dir = config_module.STRUCTURED_DATA_DIR / paper_data.get('arxiv_id', '').replace('/', '_')
     
     if arch_img_path_str:

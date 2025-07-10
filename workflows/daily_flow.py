@@ -3,8 +3,8 @@ import random
 import logging
 import json
 import time
-from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from datetime import datetime, timedelta, date, timezone
+from typing import List, Dict, Any, Optional
 
 from core import config as config_module
 from data_ingestion import arxiv_fetcher
@@ -49,100 +49,117 @@ def _get_user_preferences() -> List[Dict[str, str]]:
 
 
 
-def run_daily_workflow():
+def run_daily_workflow(
+    research_plan: Optional[str] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None
+):
     """
-    执行完整的每日工作流（V3版：采用高级分类流程）
-    1. 获取新论文。
-    2. 对新论文使用“独立分类+RAG辅助对齐”进行高质量分类。
-    3. 根据用户的精确分类偏好进行筛选。
-    4. 对筛选后的论文进行完整的处理和入库。
-    5. 生成报告。
+    执行完整的每日工作流（V5版：真分页获取 + 动态计划 + 理由注入）
     """
-    logger.info("🚀 --- [V3.0 每日工作流启动 - 含高级RAG分类] --- 🚀")
+    logger.info("🚀 --- [V5.0 每日工作流启动 - 真分页 & 理由注入] --- 🚀")
     
     current_config = config_module.get_current_config()
-    logger.info(f"当前任务使用的每日处理上限为: {current_config['DAILY_PAPER_PROCESS_LIMIT']}")
+    limit = current_config['DAILY_PAPER_PROCESS_LIMIT']
+    logger.info(f"当前任务使用的每日处理上限为: {limit}")
+
+    if research_plan:
+        logger.info(f"收到本次动态调研计划: '{research_plan[:100]}...'")
 
     user_preferences = _get_user_preferences()
-    if not user_preferences:
-        logger.warning("用户未选择任何偏好类别，将不会处理任何论文。请在UI中设置偏好。")
-        return {"message": "User preferences not set.", "papers_processed": 0}
+    if not user_preferences and not research_plan:
+        logger.warning("用户未设置任何固定偏好，也未提供动态调研计划。工作流终止。")
+        return {"message": "User preferences and research plan are not set.", "papers_processed": 0}
     
     pref_set = set((item['domain'], item['task']) for item in user_preferences)
-    logger.info(f"加载了 {len(pref_set)} 条用户偏好。")
+    logger.info(f"加载了 {len(pref_set)} 条用户固定偏好。")
 
-    try:
-        new_papers_data = arxiv_fetcher.fetch_daily_papers(
-            domains=current_config["DEFAULT_ARXIV_DOMAINS"]
-        )
-        if not new_papers_data:
-            logger.info("✅ 未发现新论文，每日任务结束。")
-            return {"message": "No new papers today.", "papers_processed": 0}
-        logger.info(f"发现 {len(new_papers_data)} 篇新论文，开始进行高级分类和筛选...")
-    except Exception as e:
-        logger.critical(f"❌ 获取每日论文时发生严重错误: {e}", exc_info=True)
-        return {"message": "Failed to fetch papers from arXiv.", "papers_processed": 0}
-
+    # 将 date 对象转换为 datetime 对象以用于查询
+    start_datetime = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc) if start_date else None
+    end_datetime = datetime.combine(end_date, datetime.max.time(), tzinfo=timezone.utc) if end_date else None
+    
     papers_to_process = []
-    for paper in new_papers_data:
-        arxiv_id = paper['arxiv_id']
-        if metadata_db.check_if_paper_exists(arxiv_id):
-            continue
-
-        # ▼▼▼ 核心修改：调用全新的高级分类函数 ▼▼▼
-        final_classification = ingestion_agent.classify_paper_with_rag_context(paper['title'], paper['summary'])
-        if not final_classification:
-            logger.warning(f"无法对论文 {arxiv_id} 进行高级分类，已跳过。")
-            continue
-        # ▲▲▲ 修改结束 ▲▲▲
-        
-        paper_category = (final_classification['domain'], final_classification['task'])
-        if paper_category in pref_set:
-            logger.info(f"👍 论文 {arxiv_id} 最终分类为 {paper_category}，匹配用户偏好，加入处理队列。")
-            paper['classification_result'] = final_classification
-            papers_to_process.append(paper)
-        else:
-            logger.info(f"👎 论文 {arxiv_id} 最终分类为 {paper_category}，不匹配用户偏好，已跳过。")
-    
-    if not papers_to_process:
-        logger.info("✅ 筛选完成，没有论文匹配用户的偏好类别。每日任务结束。")
-        return {"message": "No papers matched user preference.", "papers_processed": 0}
-    
-    logger.info(f"筛选完成，共找到 {len(papers_to_process)} 篇匹配用户偏好的论文。")
-    
-    limit = current_config["DAILY_PAPER_PROCESS_LIMIT"]
-    if len(papers_to_process) > limit:
-        logger.warning(
-            f"匹配的论文数 ({len(papers_to_process)}) 超过了设定的上限 "
-            f"({limit})，将只处理前 {limit} 篇。"
+    try:
+        # arxiv_fetcher 现在返回一个生成器，我们可以直接在 for 循环中迭代
+        paper_generator = arxiv_fetcher.fetch_daily_papers(
+            domains=current_config["DEFAULT_ARXIV_DOMAINS"],
+            start_date=start_datetime,
+            end_date=end_datetime
         )
-        papers_to_process = papers_to_process[:limit]
+        
+        logger.info("开始迭代获取和筛选论文...")
+        checked_count = 0
+        for paper in paper_generator:
+            checked_count += 1
+            if len(papers_to_process) >= limit:
+                logger.info(f"已达到每日处理上限 ({limit})，提前终止筛选。共检查了 {checked_count-1} 篇论文。")
+                break
 
-    logger.info(f"最终将有 {len(papers_to_process)} 篇论文进入处理流程。")
+            arxiv_id = paper['arxiv_id']
+            if metadata_db.check_if_paper_exists(arxiv_id):
+                continue
 
-    # 调用完整的入库流程
+            final_classification = ingestion_agent.classify_paper_with_rag_context(paper['title'], paper['summary'])
+            if not final_classification:
+                logger.warning(f"无法对论文 {arxiv_id} 进行高级分类，已跳过。")
+                continue
+            
+            paper['classification_result'] = final_classification
+            paper_category = (final_classification['domain'], final_classification['task'])
+            
+            is_match = False
+            reason = ""
+
+            if paper_category in pref_set:
+                is_match = True
+                reason = f"匹配用户固定偏好 {paper_category}"
+            elif research_plan:
+                is_relevant, justification = ingestion_agent.evaluate_relevance_by_research_plan(paper, research_plan)
+                if is_relevant:
+                    is_match = True
+                    # [核心修改] 将AI的完整理由存下来
+                    reason = justification
+
+            if is_match:
+                logger.info(f"👍 论文 {arxiv_id} 通过筛选。原因: {reason}。加入处理队列。")
+                # [核心修改] 将筛选理由注入到论文数据中，以便后续报告使用
+                paper['selection_reason'] = reason
+                papers_to_process.append(paper)
+            else:
+                logger.info(f"👎 论文 {arxiv_id} 分类为 {paper_category}，未匹配任何偏好或计划，已跳过。")
+        
+        # 循环结束后的日志
+        if len(papers_to_process) < limit:
+             logger.info(f"已检查完所有符合条件的论文({checked_count}篇)，未达到处理上限。")
+
+    except Exception as e:
+        logger.critical(f"❌ 获取或筛选论文时发生严重错误: {e}", exc_info=True)
+        return {"message": "Failed to fetch or process papers.", "papers_processed": 0}
+
+    if not papers_to_process:
+        logger.info("✅ 筛选完成，没有论文匹配用户的偏好或计划。每日任务结束。")
+        return {"message": "No papers matched user preference or plan.", "papers_processed": 0}
+    
+    logger.info(f"筛选完成，最终将有 {len(papers_to_process)} 篇论文进入处理流程。")
+
     successfully_processed_papers = process_papers_list(
         papers_to_process, 
         pdf_parsing_strategy=current_config["PDF_PARSING_STRATEGY"],
-        ingestion_mode='full' # 明确指定是完整入库
+        ingestion_mode='full'
     )
     
     if vector_db.vector_db_manager and successfully_processed_papers:
-        logger.info("所有论文处理完毕，正在保存向量索引...")
         vector_db.vector_db_manager.save()
     
     _generate_daily_report(successfully_processed_papers)
     
-    # 在工作流最后，同步一次分类体系，确保UI显示最新
     ingestion_agent.export_categories_to_json()
     
     final_message = f"每日工作流完成。成功处理并入库 {len(successfully_processed_papers)} 篇论文。"
     logger.info(f"🏁 --- [每日工作流结束]: {final_message} --- 🏁")
     
-    return {
-        "message": final_message,
-        "papers_processed": len(successfully_processed_papers)
-    }
+    return {"message": final_message, "papers_processed": len(successfully_processed_papers)}
+
 
 def _generate_daily_report(processed_papers: List[Dict[str, Any]]):
     """为处理过的论文生成包含统计信息的每日报告。"""
@@ -168,14 +185,14 @@ def _generate_daily_report(processed_papers: List[Dict[str, Any]]):
     for paper_info in processed_papers:
         arxiv_id = paper_info["arxiv_id"]
         
-        # 从数据库获取包含AI生成摘要的完整论文详情
         paper_details = metadata_db.get_paper_details_by_id(arxiv_id)
         if not paper_details:
             logger.warning(f"无法从数据库获取论文 {arxiv_id} 的详细信息，跳过此论文的报告生成。")
             continue
             
-        # paper_details 现在包含了 'generated_summary' 字段
-        
+        # [核心修改] 将内存中的筛选理由添加到从数据库获取的详情中
+        paper_details['selection_reason'] = paper_info.get('selection_reason')
+            
         safe_arxiv_id = arxiv_id.replace('/', '_')
         structured_content_path = config_module.STRUCTURED_DATA_DIR / f"{safe_arxiv_id}.json"
         if not structured_content_path.exists(): 
@@ -186,12 +203,11 @@ def _generate_daily_report(processed_papers: List[Dict[str, Any]]):
             structured_chunks = json.load(f)
             
         report_json_part = report_agent.generate_report_json_for_paper(
-            paper_meta=paper_details, # 传递完整的、更新后的论文元数据
+            paper_meta=paper_details, # 传递包含了筛选理由的完整数据
             structured_chunks=structured_chunks
         )
         if report_json_part:
             report_jsons.append(report_json_part)
-    # ▲▲▲ 修改结束 ▲▲▲
 
     if not report_jsons:
         logger.error("所有论文的报告内容都生成失败，无法创建每日报告。")
@@ -213,8 +229,7 @@ def _generate_daily_report(processed_papers: List[Dict[str, Any]]):
         json.dump(final_report_data, f, ensure_ascii=False, indent=4)
     logger.info(f"JSON报告已保存: {json_report_path}")
     
-    # 动态判断报告语言
-    report_language = 'zh' if "qwen3" in config_module.get_current_config()['OLLAMA_MODEL_NAME'].lower() else 'en'
+    report_language = 'zh' if "qwen" in config_module.get_current_config()['OLLAMA_MODEL_NAME'].lower() else 'en'
     logger.info(f"Generating PDF report in '{report_language}' language.")
     pdf_generator.generate_daily_report_pdf(final_report_data, pdf_report_path, language=report_language)
 

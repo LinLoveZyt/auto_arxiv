@@ -214,6 +214,40 @@
 
         </main>
 
+        <!-- Research Plan Modal -->
+        <div v-if="showResearchPlanModal" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-40">
+            <div class="card w-full max-w-2xl">
+                <div class="p-4 border-b border-gray-700">
+                    <h3 class="text-xl font-semibold text-white">启动每日工作流</h3>
+                </div>
+                <div class="p-6">
+                    <div class="mb-6">
+                        <label for="research-plan" class="form-label">调研计划 (可选)</label>
+                        <p class="text-gray-400 mb-2 text-sm">请输入本次运行时您特别关注的研究方向。AI将参考此计划，筛选出固定偏好之外的潜在高价值论文。</p>
+                        <textarea id="research-plan" v-model="researchPlanText" class="form-textarea w-full" rows="5" placeholder="例如：我最近在关注多模态大模型在自动驾驶领域的应用..."></textarea>
+                    </div>
+
+                    <div>
+                        <label class="form-label">论文发布日期范围</label>
+                        <p class="text-gray-400 mb-2 text-sm">选择要检索的论文发布时间区间，默认为最近3天。</p>
+                        <div class="flex items-center space-x-4">
+                            <input type="date" v-model="workflowStartDate" class="form-input w-full">
+                            <span class="text-gray-400">至</span>
+                            <input type="date" v-model="workflowEndDate" class="form-input w-full">
+                        </div>
+                    </div>
+                </div>
+                <div class="p-4 border-t border-gray-700 flex justify-end space-x-4">
+                    <button @click="showResearchPlanModal = false" class="btn btn-secondary">取消</button>
+                    <button @click="confirmRunDailyWorkflow" :disabled="isWorkflowRunning" class="btn btn-primary">
+                        <i v-if="isWorkflowRunning" class="fas fa-spinner fa-spin mr-2"></i>
+                        {{ isWorkflowRunning ? '执行中...' : '确认并开始执行' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+
         <!-- Cleanup Modal -->
         <div v-if="showCleanupModal" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-40">
             <div class="card w-full max-w-4xl max-h-[90vh] flex flex-col">
@@ -285,6 +319,13 @@
             const showCleanupModal = ref(false);
             const cleanupProposals = ref([]);
             const isExecutingCleanup = ref(false);
+            
+            // [修改] 调研计划模态框的状态
+            const showResearchPlanModal = ref(false);
+            const researchPlanText = ref('');
+            const workflowStartDate = ref('');
+            const workflowEndDate = ref('');
+
 
             // Settings Page
             const isLoadingSettings = ref(true);
@@ -307,6 +348,10 @@
             const switchPage = (page) => {
                 currentPage.value = page;
             };
+            
+            const getISODate = (date) => {
+                return new Date(date.getTime() - (date.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+            }
 
             const fetchAvailableModels = async () => {
                 try {
@@ -373,16 +418,38 @@
                 } catch (error) { showToast(error.message, 'error'); }
                 finally { isLoadingReports.value = false; }
             };
+            
+            // [修改] runDailyWorkflow现在只负责打开模态框并设置默认日期
+            const runDailyWorkflow = () => {
+                const today = new Date();
+                const threeDaysAgo = new Date();
+                threeDaysAgo.setDate(today.getDate() - 3);
+                
+                workflowEndDate.value = getISODate(today);
+                workflowStartDate.value = getISODate(threeDaysAgo);
+                
+                showResearchPlanModal.value = true;
+            };
 
-            const runDailyWorkflow = async () => {
-                if (!confirm('确定要手动执行每日工作流吗？此操作可能耗时较长。')) return;
+            // [修改] confirmRunDailyWorkflow 现在发送日期
+            const confirmRunDailyWorkflow = async () => {
                 isWorkflowRunning.value = true;
+                showResearchPlanModal.value = false; 
                 try {
-                    const response = await fetch(`${API_PREFIX}/run/daily_workflow`, { method: 'POST' });
+                    const response = await fetch(`${API_PREFIX}/run/daily_workflow`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            research_plan: researchPlanText.value,
+                            start_date: workflowStartDate.value,
+                            end_date: workflowEndDate.value
+                        }) 
+                    });
                     const data = await response.json();
                     if (!response.ok) throw new Error(data.detail || '未知错误');
                     showToast(`工作流执行成功！处理论文数: ${data.papers_processed}`, 'success');
-                    fetchReports(); // Refresh report list
+                    fetchReports(); 
+                    researchPlanText.value = ''; 
                 } catch (error) { showToast(`执行失败: ${error.message}`, 'error'); }
                 finally { isWorkflowRunning.value = false; }
             };
@@ -394,8 +461,8 @@
                     const response = await fetch(`${API_PREFIX}/run/category_collection`, { method: 'POST' });
                     const data = await response.json();
                     if (!response.ok) throw new Error(data.detail || '未知错误');
-                    showToast(data.message, 'success', 5000); // 显示更长时间
-                    fetchSettings(); // 重新加载设置以刷新分类列表
+                    showToast(data.message, 'success', 5000); 
+                    fetchSettings(); 
                 } catch (error) {
                     showToast(`类别收集失败: ${error.message}`, 'error');
                 } finally {
@@ -437,7 +504,7 @@
                     if (!response.ok) throw new Error(result.detail || '执行失败');
                     showToast(result.message, 'success');
                     showCleanupModal.value = false;
-                    fetchSettings(); // Refresh settings after merge
+                    fetchSettings(); 
                 } catch (error) { showToast(`执行合并时发生错误: ${error.message}`, 'error'); }
                 finally { isExecutingCleanup.value = false; }
             };
@@ -445,7 +512,6 @@
             const fetchSettings = async () => {
                 isLoadingSettings.value = true;
                 try {
-                    // 同时获取所有设置和可用模型
                     const [globalRes, prefsRes, catsRes, modelsRes] = await Promise.all([
                         fetch(`${API_PREFIX}/settings/global`),
                         fetch(`${API_PREFIX}/user/preferences`),
@@ -508,13 +574,11 @@
             };
 
             onMounted(() => {
-                // 初始加载时，只需要获取一次模型列表
                 fetchAvailableModels();
             });
 
             watch(currentPage, (newPage) => {
                 if (newPage === 'reports' && reports.value.length === 0) fetchReports();
-                // 只有当用户点击设置页面时，才加载所有设置信息
                 if (newPage === 'settings') fetchSettings();
             });
 
@@ -522,11 +586,12 @@
                 API_PREFIX, currentPage, switchPage, toast,
                 queryText, isQuerying, progressMessages, queryResult, parsedAnswer, handleQuery, onlineSearchEnabled,
                 reports, isLoadingReports, fetchReports,
-                isWorkflowRunning, runDailyWorkflow,
+                isWorkflowRunning, runDailyWorkflow, confirmRunDailyWorkflow,
+                showResearchPlanModal, researchPlanText, workflowStartDate, workflowEndDate,
                 isCategoryRunning, runCategoryCollection,
                 isCleanupRunning, proposeCleanups, showCleanupModal, cleanupProposals, executeCleanups, isExecutingCleanup,
                 isLoadingSettings, isSavingSettings, globalSettings, categories, userPreferences, fetchSettings, saveSettings,
-                availableModels // 暴露给模板
+                availableModels
             };
         }
     }).mount('#app')

@@ -3,7 +3,7 @@
 import logging
 import arxiv
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Generator
 
 # ▼▼▼ [修改] 改变导入方式 ▼▼▼
 from core import config as config_module
@@ -27,44 +27,53 @@ def parse_arxiv_result(result: arxiv.Result) -> Dict[str, Any]:
 
 def fetch_daily_papers(
     domains: List[str],
-    max_results: int = 100
-) -> List[Dict[str, Any]]:
-    """Fetches the latest papers from the last 3 days in the specified domains."""
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> Generator[Dict[str, Any], None, None]:
+    """
+    根据指定的领域和时间范围获取论文，并作为生成器逐一返回。
+    支持无限“分页”，直到获取完所有结果。
+    """
     if not domains:
-        logger.warning("未提供任何ArXiv领域，无法获取每日论文。")
-        return []
-        
+        logger.warning("未提供任何ArXiv领域，无法获取论文。")
+        return
+
+    # 如果未提供日期，则默认为最近3天
+    if end_date is None:
+        end_date = datetime.now(timezone.utc)
+    if start_date is None:
+        start_date = end_date - timedelta(days=3)
+
     query = " OR ".join([f"cat:{domain}" for domain in domains])
-    # 保持按提交日期排序，以获取最新的条目
+    # 将日期格式化为arxiv API要求的格式
+    date_query = f"submittedDate:[{start_date.strftime('%Y%m%d%H%M%S')} TO {end_date.strftime('%Y%m%d%H%M%S')}]"
+    full_query = f"({query}) AND {date_query}"
+    
+    logger.info(f"正在根据以下条件搜索论文：Query='{full_query}', SortBy='SubmittedDate'")
+
+    # 使用无 max_results 限制的 Search，它将返回一个迭代器
     search = arxiv.Search(
-        query=query,
-        max_results=max_results,
-        sort_by=arxiv.SortCriterion.SubmittedDate
+        query=full_query,
+        sort_by=arxiv.SortCriterion.SubmittedDate,
+        sort_order=arxiv.SortOrder.Descending
     )
     
-    start_date_utc = datetime.now(timezone.utc) - timedelta(days=3)
-    logger.info(f"Fetching up to {max_results} latest papers published after {start_date_utc.strftime('%Y-%m-%d %H:%M:%S')} (UTC) for domains '{', '.join(domains)}'...")
-    
-    results = []
-    counter = 0
+    total_found = 0
     try:
+        # search.results() 返回一个生成器，我们可以直接遍历它
         for result in search.results():
-            counter += 1
-            
-            # ▼▼▼ 核心修改：使用 .published 替代 .updated ▼▼▼
-            # 这确保我们只筛选真正在指定时间窗口内首次发表的论文
-            if result.published >= start_date_utc:
-                results.append(parse_arxiv_result(result))
-            # ▲▲▲ 核心修改结束 ▲▲▲
-
+            yield parse_arxiv_result(result)
+            total_found += 1
+            if total_found % 100 == 0:
+                logger.info(f"已获取并处理 {total_found} 篇论文...")
+                
     except arxiv.UnexpectedEmptyPageError:
-        logger.info("Reached the end of the result stream (encountered an empty page), which is normal.")
+        logger.info("已到达结果流的末尾 (正常现象)。")
     except Exception as e:
-        logger.error(f"An unexpected error occurred while fetching daily papers: {e}", exc_info=True)
-        return results
-
-    logger.info(f"Daily paper fetch complete. Scanned {counter} papers, found {len(results)} recent papers matching the date criteria.")
-    return results
+        logger.error(f"获取论文时发生未知错误: {e}", exc_info=True)
+        # 即使出错，生成器也会在这里自然停止
+    
+    logger.info(f"论文获取流程完成，共找到并返回了 {total_found} 篇论文。")
 
 
 def search_arxiv(

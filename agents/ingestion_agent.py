@@ -558,3 +558,63 @@ def export_categories_to_json() -> bool:
     except Exception as e:
         logger.error(f"导出分类到JSON时失败: {e}", exc_info=True)
         return False
+
+RELEVANCE_EVALUATION_PROMPT = """
+你是一名资深的AI研究主管，你的任务是根据我当前的“调研计划”，判断一篇新发表的论文是否值得我花时间深入研究。
+
+【我的调研计划】
+{research_plan}
+
+【候选论文信息】
+- 标题 (Title): "{title}"
+- 摘要 (Abstract): "{summary}"
+- AI初步分类: 领域({domain}), 任务({task})
+
+【你的决策指令】
+1. 核心任务：判断这篇【候选论文】的核心内容与我的【调研计划】是否高度相关。
+2. 评估标准：
+   - **主题相关性**: 论文解决的问题、提出的方法是否直接命中我的调研计划？
+   - **潜在价值**: 即使论文的AI初步分类不完全匹配我的固定偏好，它的内容是否对我的研究有重要的启发或参考价值？
+   - **权衡**: 你的判断需要科学，不能太宽泛（不相关的都选上），也不能太狭隘（只看字面意思）。要理解计划背后的意图。
+3. 输出格式：你的回答必须是一个JSON对象，包含两个字段：
+   - `is_relevant`: 布尔值 (true/false)。
+   - `justification`: 一句精炼的中文说明，解释你判断的理由（例如：“该论文提出的'传感器数据校准'方法，是调研计划中'多模态融合'的关键前置步骤。”）。如果不相关，理由应说明为何不相关。
+
+【输出JSON示例】
+{{
+  "is_relevant": true,
+  "justification": "该论文的自监督学习方法可直接应用于调研计划中的数据标注问题。"
+}}
+"""
+
+def evaluate_relevance_by_research_plan(paper_meta: Dict[str, Any], research_plan: str) -> tuple[bool, str]:
+    """
+    使用LLM根据用户提供的调研计划，评估一篇论文的相关性。
+    """
+    if not llm_client_module.llm_client:
+        logger.critical("LLM client is not initialized, cannot evaluate relevance.")
+        return False, "LLM client not available."
+
+    title = paper_meta.get("title", "N/A")
+    summary = paper_meta.get("summary", "N/A")
+    # 假设paper_meta中已经有了初步分类结果
+    classification = paper_meta.get("classification_result", {"domain": "N/A", "task": "N/A"})
+
+    prompt = RELEVANCE_EVALUATION_PROMPT.format(
+        research_plan=research_plan,
+        title=title,
+        summary=summary,
+        domain=classification.get('domain', 'N/A'),
+        task=classification.get('task', 'N/A')
+    )
+
+    system_prompt = "You are a precise, JSON-only output assistant."
+    
+    result_json = llm_client_module.llm_client.generate_json(prompt, system_prompt)
+
+    if result_json and isinstance(result_json.get("is_relevant"), bool) and result_json.get("justification"):
+        logger.info(f"AI评估结果: 相关={result_json['is_relevant']}, 理由='{result_json['justification']}'")
+        return result_json["is_relevant"], result_json["justification"]
+    
+    logger.warning(f"AI评估未能返回有效格式的JSON。LLM返回: {result_json}")
+    return False, "AI evaluation failed."

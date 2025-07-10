@@ -75,8 +75,17 @@ async def get_open_api_endpoint():
 
 # --- Workflow Triggers ---
 @app.post("/api/run/daily_workflow", response_model=schemas.DailyRunResponse, tags=["Workflows"])
-async def trigger_daily_run():
-    result = await run_in_threadpool(daily_flow.run_daily_workflow)
+async def trigger_daily_run(request: schemas.DailyRunRequest):
+    """
+    手动触发一次完整的每日工作流。
+    可以接收一个可选的“调研计划”和日期范围来辅助论文筛选。
+    """
+    result = await run_in_threadpool(
+        daily_flow.run_daily_workflow, 
+        research_plan=request.research_plan,
+        start_date=request.start_date,
+        end_date=request.end_date
+    )
     return schemas.DailyRunResponse(**result)
 
 @app.post("/api/run/category_collection", response_model=schemas.GeneralStatusResponse, tags=["Workflows"])
