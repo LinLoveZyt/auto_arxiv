@@ -8,7 +8,7 @@ import numpy as np
 
 from core import config as config_module
 from core import llm_client as llm_client_module
-from hrag import metadata_db, embedding_engine
+from hrag import metadata_db, embedding_engine, reranker as reranker_module
 
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,42 @@ You are an expert AI research taxonomist. Your task is to analyze a list of rese
       {{"domain": "Natural Language Processing", "task": "Text Generation"}}
     ]
   ]
+}}
+"""
+
+RAG_CONTEXT_CLASSIFICATION_PROMPT_TEMPLATE = """
+You are a world-class AI research classification taxonomist. Your task is to determine the most accurate and consistent classification for a new paper by leveraging context from highly similar existing papers.
+
+**New Paper to Classify:**
+- **Title:** "{new_paper_title}"
+- **Abstract:** "{new_paper_abstract}"
+
+**Your Initial Independent Suggestion:**
+- **Domain:** "{candidate_domain}"
+- **Task:** "{candidate_task}"
+
+**Reference Context (Most Similar Papers from Knowledge Base):**
+---
+{similar_papers_context}
+---
+
+**Your Task & Decision Process:**
+1.  **Analyze Context:** Carefully review the new paper's information and compare it against the reference papers. Pay close attention to their titles, abstracts, existing classifications, and rerank scores (a higher score means more relevant).
+2.  **Make a Decision:**
+    -   **Strong Alignment:** If the new paper's topic is a clear synonym or identical to one of the high-score reference papers, you **MUST** adopt the **existing classification** from that reference paper to maintain consistency.
+    -   **Novel Contribution:** If the new paper introduces a genuinely new concept not covered by the references, and your initial suggestion is accurate, you should use your **initial suggestion**.
+    -   **Refined Novelty:** If your initial suggestion is close but the context suggests a better phrasing or a more precise new category, feel free to refine it into a **new, improved classification**.
+3.  **Provide Reasoning:** Briefly explain your decision in one sentence.
+4.  **Final Output:** Your response MUST be a single, valid JSON object, adhering strictly to the specified structure. Do not add any text outside the JSON.
+
+**Output JSON Structure:**
+```json
+{{
+  "reasoning": "A brief explanation of your decision-making process.",
+  "final_classification": {{
+    "domain": "The final, most appropriate domain name",
+    "task": "The final, most appropriate task name"
+  }}
 }}
 """
 
@@ -386,3 +422,139 @@ def propose_category_merges() -> Optional[Dict[str, Any]]:
 
     logger.info(f"✅ 合并建议流程完成，共生成 {len(final_proposals)} 条高质量、无冲突的合并建议。")
     return {"proposals": final_proposals}
+
+def classify_paper_with_rag_context(title: str, abstract: str) -> Optional[Dict[str, str]]:
+    """
+    使用先进的“独立分类 + RAG辅助对齐”两阶段流程对论文进行分类。
+    """
+    logger.info(f"--- [高级分类流程启动] 论文: '{title[:50]}...' ---")
+
+    # 阶段一：获取独立的候选分类
+    logger.info("阶段 1/3: 生成独立的候选分类...")
+    candidate_classification = classify_paper(title, abstract)
+    if not candidate_classification:
+        logger.error("无法生成候选分类，高级分类流程中止。")
+        return None
+    logger.info(f"候选分类为: {candidate_classification}")
+
+    # 阶段二：基于候选分类，进行分层RAG检索
+    logger.info("阶段 2/3: 基于候选分类进行分层RAG检索...")
+    candidate_domain = candidate_classification['domain']
+    candidate_task = candidate_classification['task']
+
+    # 2a. 从数据库获取同分类的论文
+    similar_papers_from_db = metadata_db.get_papers_by_classification(candidate_domain, candidate_task)
+
+    if not similar_papers_from_db:
+        logger.warning(f"在分类 '{candidate_domain}/{candidate_task}' 下未找到任何参考论文。将直接采纳候选分类。")
+        # 直接更新全局分类文件并返回
+        _update_known_categories(candidate_domain, candidate_task)
+        return candidate_classification
+
+    # 2b. 准备重排数据
+    documents_to_rerank = []
+    doc_map = {}
+    for paper in similar_papers_from_db:
+        # 使用AI生成的摘要（如果存在）或原始摘要
+        summary = paper.get('generated_summary') or paper.get('summary', '')
+        if summary:
+            documents_to_rerank.append(summary)
+            doc_map[summary] = paper
+
+    if not documents_to_rerank:
+        logger.warning("参考论文缺少有效摘要，无法进行重排。将直接采纳候选分类。")
+        _update_known_categories(candidate_domain, candidate_task)
+        return candidate_classification
+
+    # 2c. 执行重排
+    logger.info(f"正在对 {len(documents_to_rerank)} 篇参考论文的摘要进行重排...")
+    try:
+        # 使用新论文的摘要作为查询来找最相似的已有摘要
+        scores = reranker_module.reranker.rerank(abstract, documents_to_rerank)
+        reranked_docs_with_scores = sorted(zip(documents_to_rerank, scores), key=lambda x: x[1], reverse=True)
+    except Exception as e:
+        logger.error(f"Reranker执行失败: {e}", exc_info=True)
+        # 失败时，同样采纳候选分类作为降级策略
+        _update_known_categories(candidate_domain, candidate_task)
+        return candidate_classification
+
+    # 2d. 筛选上下文并格式化
+    top_references = []
+    # 筛选分数大于0.5的，最多5篇
+    for doc_content, score in reranked_docs_with_scores:
+        if len(top_references) >= 5: break
+        if score > 0.5:
+            paper_meta = doc_map[doc_content]
+            # 获取这篇参考论文自己的分类
+            ref_classification = metadata_db.get_paper_details_by_id(paper_meta['arxiv_id']).get('classification_result', {'domain': candidate_domain, 'task': candidate_task})
+
+            top_references.append({
+                "title": paper_meta['title'],
+                "abstract": doc_content[:500] + '...', # 摘要截断以防prompt过长
+                "classification": ref_classification,
+                "score": score
+            })
+
+    if not top_references:
+        logger.info("没有找到强相关（分数>0.5）的参考论文。将直接采纳候选分类。")
+        _update_known_categories(candidate_domain, candidate_task)
+        return candidate_classification
+
+    similar_papers_context = "\n---\n".join([
+        f"[Reference Paper | Rerank Score: {ref['score']:.4f}]\n"
+        f"- Title: {ref['title']}\n"
+        f"- Abstract Snippet: {ref['abstract']}\n"
+        f"- Existing Classification: Domain='{ref['classification']['domain']}', Task='{ref['classification']['task']}'"
+        for ref in top_references
+    ])
+
+    # 阶段三：调用LLM进行最终决策
+    logger.info("阶段 3/3: 调用LLM进行最终决策...")
+    final_prompt = RAG_CONTEXT_CLASSIFICATION_PROMPT_TEMPLATE.format(
+        new_paper_title=title,
+        new_paper_abstract=abstract,
+        candidate_domain=candidate_domain,
+        candidate_task=candidate_task,
+        similar_papers_context=similar_papers_context
+    )
+
+    system_prompt = "You are a precise, JSON-only output assistant specializing in paper classification."
+    llm_result = llm_client_module.llm_client.generate_json(final_prompt, system_prompt)
+
+    if llm_result and "final_classification" in llm_result:
+        final_classification = llm_result["final_classification"]
+        reasoning = llm_result.get("reasoning", "N/A")
+        logger.info(f"✅ 高级分类流程完成。决策理由: {reasoning}")
+        logger.info(f"最终分类为: {final_classification}")
+        # 将最终确定的、高质量的分类更新到全局分类文件
+        _update_known_categories(final_classification["domain"], final_classification["task"])
+        return final_classification
+    else:
+        logger.error(f"LLM未能对分类做出最终决策。将采纳候选分类作为降级方案。LLM原始返回: {llm_result}")
+        _update_known_categories(candidate_domain, candidate_task)
+        return candidate_classification
+
+def export_categories_to_json() -> bool:
+    """
+    从数据库中查询所有分类，并覆盖写入到 categories.json 文件。
+    这是确保“数据库为唯一事实来源”的关键函数。
+    """
+    logger.info("正在从数据库导出分类体系到 categories.json...")
+    try:
+        # 从数据库获取所有分类
+        db_categories = metadata_db.get_all_domains_and_tasks()
+
+        # 构造成 categories.json 所需的格式
+        output_data = {}
+        for domain, tasks in db_categories.items():
+            output_data[domain] = {"tasks": {task: {} for task in tasks}}
+
+        # 写入文件
+        with open(config_module.CATEGORIES_JSON_PATH, 'w', encoding='utf-8') as f:
+            json.dump(output_data, f, indent=4, ensure_ascii=False)
+        
+        logger.info(f"✅ 分类体系已成功同步到 {config_module.CATEGORIES_JSON_PATH}")
+        return True
+    except Exception as e:
+        logger.error(f"导出分类到JSON时失败: {e}", exc_info=True)
+        return False

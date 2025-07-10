@@ -51,19 +51,17 @@ def _get_user_preferences() -> List[Dict[str, str]]:
 
 def run_daily_workflow():
     """
-    执行完整的每日工作流：
-    1. (可选) 执行冷启动以填充分类。
-    2. 获取新论文。
-    3. 对新论文进行独立分类，然后进行分类对齐。
-    4. 根据用户的精确分类偏好进行筛选。
-    5. 处理并入库筛选后的论文。
-    6. 生成报告。
+    执行完整的每日工作流（V3版：采用高级分类流程）
+    1. 获取新论文。
+    2. 对新论文使用“独立分类+RAG辅助对齐”进行高质量分类。
+    3. 根据用户的精确分类偏好进行筛选。
+    4. 对筛选后的论文进行完整的处理和入库。
+    5. 生成报告。
     """
-    logger.info("🚀 --- [V2.1 每日工作流启动 - 含分类对齐] --- 🚀")
+    logger.info("🚀 --- [V3.0 每日工作流启动 - 含高级RAG分类] --- 🚀")
     
     current_config = config_module.get_current_config()
     logger.info(f"当前任务使用的每日处理上限为: {current_config['DAILY_PAPER_PROCESS_LIMIT']}")
-
 
     user_preferences = _get_user_preferences()
     if not user_preferences:
@@ -71,8 +69,7 @@ def run_daily_workflow():
         return {"message": "User preferences not set.", "papers_processed": 0}
     
     pref_set = set((item['domain'], item['task']) for item in user_preferences)
-    known_categories = ingestion_agent.get_known_categories()
-    logger.info(f"加载了 {len(pref_set)} 条用户偏好和 {len(known_categories)} 个已知领域。")
+    logger.info(f"加载了 {len(pref_set)} 条用户偏好。")
 
     try:
         new_papers_data = arxiv_fetcher.fetch_daily_papers(
@@ -81,7 +78,7 @@ def run_daily_workflow():
         if not new_papers_data:
             logger.info("✅ 未发现新论文，每日任务结束。")
             return {"message": "No new papers today.", "papers_processed": 0}
-        logger.info(f"发现 {len(new_papers_data)} 篇新论文，开始进行分类、对齐和筛选...")
+        logger.info(f"发现 {len(new_papers_data)} 篇新论文，开始进行高级分类和筛选...")
     except Exception as e:
         logger.critical(f"❌ 获取每日论文时发生严重错误: {e}", exc_info=True)
         return {"message": "Failed to fetch papers from arXiv.", "papers_processed": 0}
@@ -92,28 +89,12 @@ def run_daily_workflow():
         if metadata_db.check_if_paper_exists(arxiv_id):
             continue
 
-        raw_classification = ingestion_agent.classify_paper(paper['title'], paper['summary'])
-        if not raw_classification:
-            logger.warning(f"无法对论文 {arxiv_id} 进行初步分类，已跳过。")
+        # ▼▼▼ 核心修改：调用全新的高级分类函数 ▼▼▼
+        final_classification = ingestion_agent.classify_paper_with_rag_context(paper['title'], paper['summary'])
+        if not final_classification:
+            logger.warning(f"无法对论文 {arxiv_id} 进行高级分类，已跳过。")
             continue
-        
-        aligned_result = ingestion_agent.align_classification(raw_classification, known_categories)
-        if not aligned_result:
-            logger.warning(f"对齐论文 {arxiv_id} 的分类失败，已跳过。")
-            continue
-
-        # vvv [修改] 使用正确的键名并更新分类体系 vvv
-        final_domain = aligned_result["final_domain"]
-        final_task = aligned_result["final_task"]
-        
-        # 将对齐后的、标准化的分类更新到全局分类文件中
-        ingestion_agent._update_known_categories(final_domain, final_task)
-
-        final_classification = {
-            "domain": final_domain,
-            "task": final_task
-        }
-        # ^^^ [修改] ^^^
+        # ▲▲▲ 修改结束 ▲▲▲
         
         paper_category = (final_classification['domain'], final_classification['task'])
         if paper_category in pref_set:
@@ -139,9 +120,11 @@ def run_daily_workflow():
 
     logger.info(f"最终将有 {len(papers_to_process)} 篇论文进入处理流程。")
 
+    # 调用完整的入库流程
     successfully_processed_papers = process_papers_list(
         papers_to_process, 
-        pdf_parsing_strategy=current_config["PDF_PARSING_STRATEGY"]
+        pdf_parsing_strategy=current_config["PDF_PARSING_STRATEGY"],
+        ingestion_mode='full' # 明确指定是完整入库
     )
     
     if vector_db.vector_db_manager and successfully_processed_papers:
@@ -150,6 +133,9 @@ def run_daily_workflow():
     
     _generate_daily_report(successfully_processed_papers)
     
+    # 在工作流最后，同步一次分类体系，确保UI显示最新
+    ingestion_agent.export_categories_to_json()
+    
     final_message = f"每日工作流完成。成功处理并入库 {len(successfully_processed_papers)} 篇论文。"
     logger.info(f"🏁 --- [每日工作流结束]: {final_message} --- 🏁")
     
@@ -157,7 +143,6 @@ def run_daily_workflow():
         "message": final_message,
         "papers_processed": len(successfully_processed_papers)
     }
-
 
 def _generate_daily_report(processed_papers: List[Dict[str, Any]]):
     """为处理过的论文生成包含统计信息的每日报告。"""
@@ -179,7 +164,7 @@ def _generate_daily_report(processed_papers: List[Dict[str, Any]]):
         statistics[domain][task] += 1
 
     report_jsons = []
-    # ▼▼▼ [核心修改] 循环时获取完整的、包含AI摘要的论文数据 ▼▼▼
+    
     for paper_info in processed_papers:
         arxiv_id = paper_info["arxiv_id"]
         
@@ -233,21 +218,23 @@ def _generate_daily_report(processed_papers: List[Dict[str, Any]]):
     logger.info(f"Generating PDF report in '{report_language}' language.")
     pdf_generator.generate_daily_report_pdf(final_report_data, pdf_report_path, language=report_language)
 
+
 def run_category_collection_workflow() -> Dict[str, Any]:
     """
-    执行一个轻量级的类别收集工作流。
-    该流程仅从arXiv获取论文，使用LLM进行分类以丰富本地的`categories.json`文件，
-    但不会对论文进行下载、解析或入库，以实现快速的分类体系扩充。
+    执行一个轻量级的类别收集工作流（V2版：轻量级入库）。
+    该流程从arXiv获取论文，使用LLM进行高质量分类，然后只将论文元数据和分类
+    信息写入数据库，不处理PDF，以实现快速的分类体系扩充。
     """
     current_config = config_module.get_current_config()
-    logger.info("--- [手动类别收集工作流启动] ---")
+    logger.info("--- [手动类别收集工作流启动 (V2: 轻量级入库)] ---")
 
     target_count = current_config['CATEGORY_COLLECTION_COUNT']
     years_window = current_config['CATEGORY_COLLECTION_YEARS_WINDOW']
     domains_query = " OR ".join([f"cat:{domain}" for domain in current_config['CATEGORY_COLLECTION_DOMAINS']])
     
-    logger.info(f"目标：收集 {target_count} 篇论文的分类信息。")
+    logger.info(f"目标：为 {target_count} 篇论文进行分类并轻量级入库。")
 
+    # ... [此部分采样逻辑与旧代码相同，无需更改] ...
     now = datetime.now()
     all_possible_months = []
     for year in range(now.year - years_window + 1, now.year + 1):
@@ -259,12 +246,12 @@ def run_category_collection_workflow() -> Dict[str, Any]:
         logger.warning("类别收集：未能生成任何可供采样的年月范围。")
         return {"message": "未能生成任何可供采样的年月范围。", "categories_added": 0}
 
-    papers_to_classify = []
+    papers_to_classify_and_ingest = []
     seen_ids = set()
     attempts = 0
-    max_attempts = target_count * 15 # 增加尝试次数以提高成功率
+    max_attempts = target_count * 15
 
-    while len(papers_to_classify) < target_count and attempts < max_attempts:
+    while len(papers_to_classify_and_ingest) < target_count and attempts < max_attempts:
         attempts += 1
         year, month = random.choice(all_possible_months)
         start_date = datetime(year, month, 1)
@@ -273,7 +260,6 @@ def run_category_collection_workflow() -> Dict[str, Any]:
         date_query = f"submittedDate:[{start_date.strftime('%Y%m%d')} TO {end_date.strftime('%Y%m%d')}]"
         full_query = f"({domains_query}) AND {date_query}"
         
-        # 每次只获取少量候选，避免单次API调用过多
         candidate_papers = arxiv_fetcher.search_arxiv(
             query=full_query, max_results=20, sort_by=arxiv.SortCriterion.Relevance
         )
@@ -283,42 +269,43 @@ def run_category_collection_workflow() -> Dict[str, Any]:
         random.shuffle(candidate_papers)
         for paper in candidate_papers:
             arxiv_id = paper['arxiv_id']
-            # 我们只关心我们还不知道分类的论文，但这里简化为检查论文是否存在
             if arxiv_id not in seen_ids and not metadata_db.check_if_paper_exists(arxiv_id):
                 logger.info(f"类别收集：成功采样到新论文 {arxiv_id} (来自 {year}-{month})。 "
-                            f"当前进度: {len(papers_to_classify) + 1}/{target_count}")
-                papers_to_classify.append(paper)
+                            f"当前进度: {len(papers_to_classify_and_ingest) + 1}/{target_count}")
+                papers_to_classify_and_ingest.append(paper)
                 seen_ids.add(arxiv_id)
-                if len(papers_to_classify) >= target_count:
+                if len(papers_to_classify_and_ingest) >= target_count:
                     break
-        if len(papers_to_classify) >= target_count:
+        if len(papers_to_classify_and_ingest) >= target_count:
             break
     
-    if not papers_to_classify:
+    if not papers_to_classify_and_ingest:
         logger.warning("类别收集：在指定次数的尝试中未能获取到任何新的、符合条件的论文。")
         return {"message": "未能获取到任何新的论文。", "categories_added": 0}
         
-    logger.info(f"采样完成，将对 {len(papers_to_classify)} 篇新论文进行纯分类处理...")
+    logger.info(f"采样完成，将对 {len(papers_to_classify_and_ingest)} 篇新论文进行高级分类和轻量级入库...")
 
-    new_categories_count = 0
-    known_categories = ingestion_agent.get_known_categories()
+    # 对采样的论文进行分类
+    for paper in papers_to_classify_and_ingest:
+        # 使用新的高级分类函数，保证分类质量
+        final_classification = ingestion_agent.classify_paper_with_rag_context(paper['title'], paper['summary'])
+        if final_classification:
+            paper['classification_result'] = final_classification
+        else:
+            # 如果分类失败，可以给一个默认值或直接从列表中移除
+            logger.warning(f"论文 {paper['arxiv_id']} 分类失败，将不会被入库。")
+    
+    # 过滤掉分类失败的论文
+    papers_to_ingest_lightly = [p for p in papers_to_classify_and_ingest if 'classification_result' in p]
+    
+    successfully_processed = process_papers_list(
+        papers_to_ingest_lightly,
+        ingestion_mode='metadata_only'
+    )
 
-    for paper in papers_to_classify:
-        # 这是核心的简化：只进行分类，不入库
-        raw_classification = ingestion_agent.classify_paper(paper['title'], paper['summary'])
-        if not raw_classification:
-            logger.warning(f"无法对论文 {paper['arxiv_id']} 进行分类，已跳过。")
-            continue
-        
-        # 可选：进行分类对齐以保持体系整洁
-        aligned_result = ingestion_agent.align_classification(raw_classification, known_categories)
-        if aligned_result:
-             # _update_known_categories 已在 classify_paper 和 align_classification 内部被调用
-             new_categories_count += 1
-             # 更新内存中的 known_categories 以供下一次对齐使用
-             ingestion_agent._update_known_categories(aligned_result["final_domain"], aligned_result["final_task"])
+    # 在工作流最后，同步一次分类体系，确保UI显示最新
+    ingestion_agent.export_categories_to_json()
 
-
-    message = f"类别收集完成！成功处理了 {len(papers_to_classify)} 篇论文，扩充了分类体系。"
+    message = f"类别收集完成！成功为 {len(successfully_processed)} 篇论文添加了分类并轻量级入库。"
     logger.info(f"--- [手动类别收集工作流结束]: {message} ---")
-    return {"message": message, "categories_added": new_categories_count}
+    return {"message": message, "categories_added": len(successfully_processed)}

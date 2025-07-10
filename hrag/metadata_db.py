@@ -28,6 +28,29 @@ def get_db_connection() -> sqlite3.Connection:
         logger.critical(f"❌ 无法连接到SQLite数据库: {e}")
         raise
 
+def get_papers_by_classification(domain_name: str, task_name: str, limit: int = 100) -> List[Dict[str, Any]]:
+    """根据领域和任务名称获取论文列表（摘要和元数据）。"""
+    conn = get_db_connection()
+    try:
+        query = """
+            SELECT p.arxiv_id, p.title, p.generated_summary, p.summary
+            FROM papers p
+            JOIN domains d ON p.domain_id = d.id
+            JOIN tasks t ON p.task_id = t.id
+            WHERE d.name = ? AND t.name = ?
+            ORDER BY p.published_date DESC
+            LIMIT ?;
+        """
+        cursor = conn.execute(query, (domain_name, task_name, limit))
+        papers = [dict(row) for row in cursor.fetchall()]
+        logger.info(f"在分类 '{domain_name}/{task_name}' 下找到了 {len(papers)} 篇论文。")
+        return papers
+    except sqlite3.Error as e:
+        logger.error(f"按分类获取论文时出错: {e}", exc_info=True)
+        return []
+    finally:
+        conn.close()
+
 def create_tables():
     """
     创建所有必要的数据库表。

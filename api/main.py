@@ -293,9 +293,9 @@ async def update_global_settings(payload: Dict[str, Any] = Body(...)):
 @app.post("/api/categories/execute-merges", response_model=Dict[str, str], tags=["Maintenance"])
 async def execute_category_merges(payload: Dict[str, Any] = Body(...)):
     """
-    根据用户确认的列表，使用两阶段提交流程执行分类合并操作，以解决链式依赖问题。
+    根据用户确认的列表，执行分类合并操作，并在操作后同步JSON文件。
     """
-    logger.info("--- [API] 接收到执行分类合并请求 (v2 - 两阶段) ---")
+    logger.info("--- [API] 接收到执行分类合并请求 ---")
     confirmed_merges = payload.get("confirmed_merges")
     if not isinstance(confirmed_merges, list):
         raise HTTPException(status_code=400, detail="请求体格式错误，需要'confirmed_merges'列表。")
@@ -335,41 +335,11 @@ async def execute_category_merges(payload: Dict[str, Any] = Body(...)):
             logger.info("--- [合并阶段2/2] 所有冗余任务删除完毕 ---")
 
 
-        # --- 文件层面的清理和对齐 (在所有数据库操作成功后进行) ---
-        all_categories = ingestion_agent.get_known_categories()
-        merge_map = { (item["from"]["domain"], item["from"]["task"]): (item["to"]["domain"], item["to"]["task"]) for item in confirmed_merges }
-
-        # a. 清理 categories.json
-        cats_to_delete_tuples = { (item["from"]["domain"], item["from"]["task"]) for item in confirmed_merges }
-        temp_categories = all_categories.copy()
-        for domain, task in cats_to_delete_tuples:
-            if domain in temp_categories and task in temp_categories[domain]["tasks"]:
-                del temp_categories[domain]["tasks"][task]
-                if not temp_categories[domain]["tasks"]:
-                     del temp_categories[domain]
-        # vvv [修改] vvv
-        with open(config_module.CATEGORIES_JSON_PATH, 'w', encoding='utf-8') as f:
-            json.dump(temp_categories, f, indent=4, ensure_ascii=False)
-        logger.info("categories.json 文件已清理。")
-
-        # b. 对齐 user_preferences.json
-        if config_module.USER_PREFERENCES_PATH.exists():
-            with open(config_module.USER_PREFERENCES_PATH, 'r', encoding='utf-8') as f:
-                user_prefs = json.load(f)
-
-            original_prefs = user_prefs.get("selected_categories", [])
-            updated_prefs = [
-                {"domain": merge_map.get((p["domain"], p["task"]), (p["domain"], p["task"]))[0],
-                 "task": merge_map.get((p["domain"], p["task"]), (p["domain"], p["task"]))[1]}
-                for p in original_prefs
-            ]
-            unique_prefs_tuples = sorted(list(set((d['domain'], d['task']) for d in updated_prefs)))
-            user_prefs["selected_categories"] = [{"domain": d, "task": t} for d, t in unique_prefs_tuples]
-
-            with open(config_module.USER_PREFERENCES_PATH, 'w', encoding='utf-8') as f:
-                json.dump(user_prefs, f, indent=4, ensure_ascii=False)
-            logger.info("user_preferences.json 文件已对齐。")
-        # ^^^ [修改] ^^^
+        # ▼▼▼ 核心修改：不再手动清理JSON，而是调用统一的导出函数 ▼▼▼
+        # 在所有数据库操作成功后，从数据库重新生成最新的JSON文件
+        logger.info("正在同步数据库分类到JSON文件...")
+        ingestion_agent.export_categories_to_json()
+        # ▲▲▲ 修改结束 ▲▲▲
 
         message = f"分类清理完成，成功处理 {successful_updates} / {len(confirmed_merges)} 条合并规则。"
         logger.info(message)
