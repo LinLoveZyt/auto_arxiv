@@ -32,46 +32,52 @@ def fetch_daily_papers(
 ) -> Generator[Dict[str, Any], None, None]:
     """
     根据指定的领域和时间范围获取论文，并作为生成器逐一返回。
-    支持无限“分页”，直到获取完所有结果。
+    使用经过验证的`arxiv.Client`和异常捕获机制，以实现稳健、可靠的无限分页。
     """
     if not domains:
         logger.warning("未提供任何ArXiv领域，无法获取论文。")
         return
 
-    # 如果未提供日期，则默认为最近3天
+    # 1. 设置默认日期和查询条件
     if end_date is None:
         end_date = datetime.now(timezone.utc)
     if start_date is None:
         start_date = end_date - timedelta(days=3)
 
     query = " OR ".join([f"cat:{domain}" for domain in domains])
-    # 将日期格式化为arxiv API要求的格式
     date_query = f"submittedDate:[{start_date.strftime('%Y%m%d%H%M%S')} TO {end_date.strftime('%Y%m%d%H%M%S')}]"
     full_query = f"({query}) AND {date_query}"
     
-    logger.info(f"正在根据以下条件搜索论文：Query='{full_query}', SortBy='SubmittedDate'")
+    logger.info(f"正在根据以下条件搜索论文：Query='{full_query}'")
 
-    # 使用无 max_results 限制的 Search，它将返回一个迭代器
+    # 2. 构造 Client (定义获取方式) 和 Search (定义获取内容)
+    client = arxiv.Client(
+      page_size = 1000,
+      delay_seconds = 5,
+      num_retries = 5
+    )
     search = arxiv.Search(
         query=full_query,
         sort_by=arxiv.SortCriterion.SubmittedDate,
-        sort_order=arxiv.SortOrder.Descending
+        sort_order=arxiv.SortOrder.Descending,
     )
     
     total_found = 0
     try:
-        # search.results() 返回一个生成器，我们可以直接遍历它
-        for result in search.results():
+        # 3. 调用 client.results() 获取生成器，并优雅地处理已知异常
+        results_generator = client.results(search)
+        for result in results_generator:
             yield parse_arxiv_result(result)
             total_found += 1
-            if total_found % 100 == 0:
+            if total_found > 0 and total_found % 100 == 0:
                 logger.info(f"已获取并处理 {total_found} 篇论文...")
                 
     except arxiv.UnexpectedEmptyPageError:
-        logger.info("已到达结果流的末尾 (正常现象)。")
+        # 将这个异常视为获取结束的正常信号，不做任何操作，让函数自然结束
+        logger.info("捕获到 UnexpectedEmptyPageError，表明已成功到达结果流的末尾。")
+
     except Exception as e:
         logger.error(f"获取论文时发生未知错误: {e}", exc_info=True)
-        # 即使出错，生成器也会在这里自然停止
     
     logger.info(f"论文获取流程完成，共找到并返回了 {total_found} 篇论文。")
 
