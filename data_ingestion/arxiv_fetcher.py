@@ -5,7 +5,7 @@ import arxiv
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional, Generator
 
-# ▼▼▼ [修改] 改变导入方式 ▼▼▼
+
 from core import config as config_module
 
 logger = logging.getLogger(__name__)
@@ -16,14 +16,13 @@ def parse_arxiv_result(result: arxiv.Result) -> Dict[str, Any]:
         "arxiv_id": result.get_short_id(),
         "title": result.title,
         "summary": result.summary,
-        "authors": [author.name for author in result.authors],
+        # 作者信息将从OCR获取，这里只保留姓名列表作为备用
+        "authors": [author.name for author in result.authors], 
         "published_date": result.published,
         "updated_date": result.updated,
         "pdf_url": result.pdf_url,
         "primary_category": result.primary_category
     }
-
-
 
 def fetch_daily_papers(
     domains: List[str],

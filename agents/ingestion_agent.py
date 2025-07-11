@@ -1,7 +1,7 @@
 # agents/ingestion_agent.py
 import logging
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import random
 from sklearn.cluster import AgglomerativeClustering
 import numpy as np
@@ -618,3 +618,179 @@ def evaluate_relevance_by_research_plan(paper_meta: Dict[str, Any], research_pla
     
     logger.warning(f"AI评估未能返回有效格式的JSON。LLM返回: {result_json}")
     return False, "AI evaluation failed."
+
+# --- Prompts for Quality Assessment ---
+CHECK_TEAM_PROMPT = """
+You are an expert research team identification assistant. Your task is to determine if any of the author affiliations from a new paper correspond to a list of prestigious institutions.
+
+**List of Prestigious Institutions (Standard Names):**
+{strong_teams_list}
+
+**Author Affiliations from the New Paper:**
+{paper_affiliations_list}
+
+**Instructions:**
+1.  Carefully examine each affiliation from the new paper.
+2.  Compare it against the list of prestigious institutions. The name might be a variation, an abbreviation, or a sub-lab (e.g., "Stanford AI Lab" should match "Stanford University").
+3.  If you find a convincing match, your decision is "yes". Otherwise, it's "no".
+
+**Your Output MUST be a single JSON object with the following format:**
+{{
+  "is_match": true,
+  "matched_team": "The standard name from the Prestigious Institutions list",
+  "evidence": "The original affiliation text from the paper that led to your decision"
+}}
+
+If no match is found, return:
+{{
+  "is_match": false,
+  "matched_team": null,
+  "evidence": null
+}}
+"""
+
+CHECK_AUTHOR_PROMPT = """
+You are a world-class expert in identifying influential researchers, specializing in disambiguating authors with the same name.
+
+List of Influential Researchers (with their context):
+{strong_authors_list}
+
+Candidate Paper Information:
+Title: "{paper_title}"
+Abstract: "{paper_abstract}"
+Authors (and their affiliations, if available):
+{paper_authors_list}
+
+Instructions:
+Review the candidate paper's authors.
+For each author, check if their name matches anyone in the "List of Influential Researchers".
+Crucially, to avoid name ambiguity, you MUST use the context. A match is only valid if the paper's topic (from title/abstract) and the author's affiliation (if provided) are consistent with the known research areas and affiliations of the influential researcher.
+Your goal is to find the first, most confident match.
+Your Output MUST be a single JSON object with the following format:
+{{
+  "is_match": true,
+  "matched_author_name": "The name of the influential researcher from the list",
+  "evidence": "A brief justification explaining why you are confident in the match, citing the consistency of topic or affiliation."
+}}
+
+If no confident match is found, return:
+{{
+  "is_match": false,
+  "matched_author_name": null,
+  "evidence": "No influential authors were confidently identified based on name, topic, and affiliation."
+}}
+
+"""
+def check_strong_team(ocr_affiliations: List[str]) -> (bool, str):
+    """
+    Checks if any of the affiliations extracted from OCR correspond to a "strong team".
+    """
+    if not ocr_affiliations:
+        return False, ""
+        
+    if not config_module.STRONG_TEAMS_PATH.exists(): return False, ""
+    try:
+        with open(config_module.STRONG_TEAMS_PATH, 'r', encoding='utf-8') as f:
+            strong_teams = json.load(f)
+        if not strong_teams: return False, ""
+    except (IOError, json.JSONDecodeError):
+        return False, ""
+
+    prompt = CHECK_TEAM_PROMPT.format(
+        strong_teams_list=json.dumps(strong_teams, indent=2),
+        paper_affiliations_list=json.dumps(ocr_affiliations, indent=2)
+    )
+    system_prompt = "You are a precise, JSON-only output assistant."
+    result = llm_client_module.llm_client.generate_json(prompt, system_prompt)
+
+    if result and result.get("is_match"):
+        reason = f"强团队: {result.get('matched_team', 'N/A')} (来源: {result.get('evidence', 'N/A')})"
+        logger.info(f"质量筛选-团队: 匹配成功。{reason}")
+        return True, reason
+    
+    return False, ""
+
+def check_strong_author(paper_meta: Dict, ocr_authors: List[str]) -> (bool, str):
+    """
+    Checks if a paper has a "strong author" based on OCR-extracted names, using context to disambiguate.
+    """
+    if not ocr_authors:
+        return False, ""
+
+    if not config_module.STRONG_AUTHORS_PATH.exists(): return False, ""
+    try:
+        with open(config_module.STRONG_AUTHORS_PATH, 'r', encoding='utf-8') as f:
+            strong_authors = json.load(f)
+        if not strong_authors: return False, ""
+    except (IOError, json.JSONDecodeError):
+        return False, ""
+
+    # 为了给LLM更清晰的输入，我们将作者列表格式化为字符串
+    ocr_authors_str = ", ".join(ocr_authors)
+
+    prompt = CHECK_AUTHOR_PROMPT.format(
+        strong_authors_list=json.dumps(strong_authors, indent=2, ensure_ascii=False),
+        paper_title=paper_meta.get('title', ''),
+        paper_abstract=paper_meta.get('summary', ''),
+        paper_authors_list=ocr_authors_str # 使用格式化后的字符串
+    )
+    system_prompt = "You are a precise, JSON-only output assistant specializing in author disambiguation."
+    result = llm_client_module.llm_client.generate_json(prompt, system_prompt)
+
+    if result and result.get("is_match"):
+        reason = f"强作者: {result.get('matched_author_name', 'N/A')} ({result.get('evidence', 'N/A')})"
+        logger.info(f"质量筛选-作者: 匹配成功。{reason}")
+        return True, reason
+    return False, ""    
+
+
+# 从OCR结果提取作者/机构的Agent
+EXTRACT_AUTHORSHIP_PROMPT = """
+You are an expert document analyst specializing in parsing academic papers. Below are text chunks extracted sequentially from the first page of a research paper. Your task is to identify and extract the names of the authors and their affiliations.
+
+**Text Chunks from First Page:**
+---
+{text_chunks_str}
+---
+
+**Instructions:**
+1.  Read through the text chunks to identify patterns related to authorship. Authors' names are typically listed together, right below the title. Affiliations (universities, companies) often follow the author list.
+2.  Extract all unique author names you can find.
+3.  Extract all unique affiliation names. Note that multiple authors might share the same affiliation.
+4.  If no authors or affiliations can be clearly identified, return empty lists.
+
+**Your Output MUST be a single JSON object with the following format:**
+```json
+{{
+  "authors": ["Author Name One", "Author Name Two"],
+  "affiliations": ["Affiliation One", "Affiliation Two"]
+}}
+```
+"""
+
+def extract_authors_and_affiliations_from_ocr(structured_chunks: List[Dict]) -> (List[str], List[str]):
+    """
+    Uses an LLM to extract author names and affiliations from the OCR-processed text chunks of a paper's first page.
+    """
+    # 只关注第一页的文本块，因为作者信息通常在这里
+    first_page_texts = [chunk.get("text", "") for chunk in structured_chunks if chunk.get("page_idx") == 0 and chunk.get("type") == "text"]
+
+    # 将文本块列表转换为一个简单的字符串，以便放入Prompt
+    text_chunks_str = "\n".join(f'- "{text}"' for text in first_page_texts if text.strip())
+
+    if not text_chunks_str:
+        return [], []
+
+    prompt = EXTRACT_AUTHORSHIP_PROMPT.format(text_chunks_str=text_chunks_str)
+    system_prompt = "You are a precise, JSON-only output assistant."
+
+    result = llm_client_module.llm_client.generate_json(prompt, system_prompt)
+
+    if result and isinstance(result.get("authors"), list) and isinstance(result.get("affiliations"), list):
+        authors = result["authors"]
+        affiliations = result["affiliations"]
+        logger.info(f"从OCR结果中成功提取到 {len(authors)} 位作者和 {len(affiliations)} 个机构。")
+        return authors, affiliations
+
+    logger.warning("未能从OCR结果中有效提取作者和机构信息。")
+    return [], []

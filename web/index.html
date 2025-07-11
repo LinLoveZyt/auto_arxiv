@@ -185,6 +185,22 @@
                                     <div class="form-group"><label class="form-label">报告作者</label><input type="text" v-model="globalSettings.REPORT_AUTHOR" class="form-input w-full mt-1"></div>
                                 </div>
                             </div>
+                            <div>
+                                <h3 class="text-xl font-semibold text-white mb-4 border-b border-gray-700 pb-2">质量筛选配置</h3>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6 mt-4">
+                                    <div class="form-group">
+                                        <label for="strong-teams" class="form-label">强团队名单 (每行一个)</label>
+                                        <p class="text-gray-400 text-sm mb-2">AI将进行模糊匹配，例如 "MIT CSAIL" 会匹配 "Massachusetts Institute of Technology"。</p>
+                                        <textarea id="strong-teams" v-model="strongTeamsText" class="form-textarea w-full h-48 font-mono text-sm"></textarea>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="strong-authors" class="form-label">强作者名单 (JSON格式)</label>
+                                        <p class="text-gray-400 text-sm mb-2">为精确识别，请提供包含姓名、机构和领域的上下文信息。</p>
+                                        <textarea id="strong-authors" v-model="strongAuthorsText" class="form-textarea w-full h-48 font-mono text-sm"></textarea>
+                                    </div>
+                                </div>
+                            </div>
+
                             <!-- User Preferences -->
                             <div>
                                 <h3 class="text-xl font-semibold text-white mb-4 border-b border-gray-700 pb-2">用户偏好：选择您感兴趣的研究类别</h3>
@@ -320,21 +336,21 @@
             const cleanupProposals = ref([]);
             const isExecutingCleanup = ref(false);
             
-            // [修改] 调研计划模态框的状态
             const showResearchPlanModal = ref(false);
             const researchPlanText = ref('');
             const workflowStartDate = ref('');
             const workflowEndDate = ref('');
 
-
             // Settings Page
             const isLoadingSettings = ref(true);
             const isSavingSettings = ref(false);
-            const globalSettings = ref({ DEFAULT_ARXIV_DOMAINS_TEXT: '',
-                                        CATEGORY_COLLECTION_COUNT: 15
-                                    });
+            const globalSettings = ref({ DEFAULT_ARXIV_DOMAINS_TEXT: '', CATEGORY_COLLECTION_COUNT: 15 });
             const categories = ref({});
             const userPreferences = ref([]);
+            // ▼▼▼ [新增] 质量名单状态 ▼▼▼
+            const strongTeamsText = ref('');
+            const strongAuthorsText = ref('');
+            // ▲▲▲ [新增] ▲▲▲
 
             // === Computed Properties ===
             const parsedAnswer = computed(() => queryResult.value.answer ? marked.parse(queryResult.value.answer) : '');
@@ -419,7 +435,6 @@
                 finally { isLoadingReports.value = false; }
             };
             
-            // [修改] runDailyWorkflow现在只负责打开模态框并设置默认日期
             const runDailyWorkflow = () => {
                 const today = new Date();
                 const threeDaysAgo = new Date();
@@ -431,7 +446,6 @@
                 showResearchPlanModal.value = true;
             };
 
-            // [修改] confirmRunDailyWorkflow 现在发送日期
             const confirmRunDailyWorkflow = async () => {
                 isWorkflowRunning.value = true;
                 showResearchPlanModal.value = false; 
@@ -512,13 +526,17 @@
             const fetchSettings = async () => {
                 isLoadingSettings.value = true;
                 try {
-                    const [globalRes, prefsRes, catsRes, modelsRes] = await Promise.all([
+                    // ▼▼▼ [修改] 并行获取所有设置，包括新的质量名单 ▼▼▼
+                    const [globalRes, prefsRes, catsRes, modelsRes, qualityRes] = await Promise.all([
                         fetch(`${API_PREFIX}/settings/global`),
                         fetch(`${API_PREFIX}/user/preferences`),
                         fetch(`${API_PREFIX}/categories`),
-                        fetch(`${API_PREFIX}/settings/available-models`)
+                        fetch(`${API_PREFIX}/settings/available-models`),
+                        fetch(`${API_PREFIX}/quality-lists`) // 新增的API调用
                     ]);
-                    if (!globalRes.ok || !prefsRes.ok || !catsRes.ok || !modelsRes.ok) throw new Error('获取设置信息失败');
+                    if (!globalRes.ok || !prefsRes.ok || !catsRes.ok || !modelsRes.ok || !qualityRes.ok) {
+                        throw new Error('获取设置信息时发生一个或多个错误');
+                    }
                     
                     const globalData = await globalRes.json();
                     globalSettings.value = {
@@ -526,10 +544,15 @@
                         DEFAULT_ARXIV_DOMAINS_TEXT: (globalData.DEFAULT_ARXIV_DOMAINS || []).join(', ')
                     };
 
+                    const qualityData = await qualityRes.json();
+                    strongTeamsText.value = (qualityData.teams || []).join('\n');
+                    strongAuthorsText.value = JSON.stringify(qualityData.authors || [], null, 2);
+
                     categories.value = await catsRes.json();
                     const prefsData = await prefsRes.json();
                     userPreferences.value = (prefsData.selected_categories || []).map(p => `${p.domain}__${p.task}`);
                     availableModels.value = await modelsRes.json();
+                    // ▲▲▲ [修改] ▲▲▲
 
                 } catch (error) { showToast(error.message, 'error'); }
                 finally { isLoadingSettings.value = false; }
@@ -557,17 +580,31 @@
                             return { domain, task };
                         })
                     };
+                    
+                    // ▼▼▼ [修改] 准备并发送质量名单数据 ▼▼▼
+                    let authorsPayload;
+                    try {
+                        authorsPayload = JSON.parse(strongAuthorsText.value || '[]');
+                    } catch(e) {
+                        throw new Error("强作者名单不是一个合法的JSON格式！");
+                    }
+                    const qualityPayload = {
+                        teams: strongTeamsText.value.split('\n').map(s => s.trim()).filter(Boolean),
+                        authors: authorsPayload
+                    };
+                    // ▲▲▲ [修改] ▲▲▲
 
-                    const [globalRes, prefsRes] = await Promise.all([
+                    // ▼▼▼ [修改] 并行保存所有设置 ▼▼▼
+                    const [globalRes, prefsRes, qualityRes] = await Promise.all([
                         fetch(`${API_PREFIX}/settings/global`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(globalPayload) }),
-                        fetch(`${API_PREFIX}/user/preferences`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(prefsPayload) })
+                        fetch(`${API_PREFIX}/user/preferences`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(prefsPayload) }),
+                        fetch(`${API_PREFIX}/quality-lists`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(qualityPayload) })
                     ]);
                     
-                    if (!globalRes.ok || !prefsRes.ok) {
-                        const errorG = await globalRes.text();
-                        const errorP = await prefsRes.text();
-                        throw new Error(`保存失败: 全局设置(${globalRes.status}) ${errorG}, 用户偏好(${prefsRes.status}) ${errorP}`);
+                    if (!globalRes.ok || !prefsRes.ok || !qualityRes.ok) {
+                        throw new Error(`保存失败: 一个或多个设置项未能成功保存。`);
                     }
+                    // ▲▲▲ [修改] ▲▲▲
                     showToast('所有设置已成功保存！新设置将在下次任务运行时生效。', 'success');
                 } catch (error) { showToast(`保存失败: ${error.message}`, 'error'); }
                 finally { isSavingSettings.value = false; }
@@ -591,7 +628,10 @@
                 isCategoryRunning, runCategoryCollection,
                 isCleanupRunning, proposeCleanups, showCleanupModal, cleanupProposals, executeCleanups, isExecutingCleanup,
                 isLoadingSettings, isSavingSettings, globalSettings, categories, userPreferences, fetchSettings, saveSettings,
-                availableModels
+                availableModels,
+                // ▼▼▼ [新增] 暴露新状态给模板 ▼▼▼
+                strongTeamsText, strongAuthorsText
+                // ▲▲▲ [新增] ▲▲▲
             };
         }
     }).mount('#app')

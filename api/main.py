@@ -360,3 +360,48 @@ async def execute_category_merges(payload: Dict[str, Any] = Body(...)):
     finally:
         if conn:
             conn.close()
+
+
+@app.get("/api/quality-lists", response_model=Dict[str, Any], tags=["Configuration"])
+async def get_quality_lists():
+    """获取强团队和强作者名单。"""
+    teams = []
+    authors = []
+    try:
+        if config_module.STRONG_TEAMS_PATH.exists():
+            with open(config_module.STRONG_TEAMS_PATH, 'r', encoding='utf-8') as f:
+                teams = json.load(f)
+    except (IOError, json.JSONDecodeError):
+        pass # 如果文件有问题，返回空列表
+
+    try:
+        if config_module.STRONG_AUTHORS_PATH.exists():
+            with open(config_module.STRONG_AUTHORS_PATH, 'r', encoding='utf-8') as f:
+                authors = json.load(f)
+    except (IOError, json.JSONDecodeError):
+        pass
+
+    return {"teams": teams, "authors": authors}
+
+@app.post("/api/quality-lists", response_model=Dict[str, str], tags=["Configuration"])
+async def save_quality_lists(payload: Dict[str, Any] = Body(...)):
+    """保存强团队和强作者名单。"""
+    teams_list = payload.get("teams", [])
+    authors_list = payload.get("authors", [])
+
+    if not isinstance(teams_list, list) or not isinstance(authors_list, list):
+         raise HTTPException(status_code=400, detail="请求体格式错误，需要'teams'和'authors'列表。")
+
+    try:
+        with open(config_module.STRONG_TEAMS_PATH, 'w', encoding='utf-8') as f:
+            json.dump(teams_list, f, indent=4, ensure_ascii=False)
+        
+        with open(config_module.STRONG_AUTHORS_PATH, 'w', encoding='utf-8') as f:
+            json.dump(authors_list, f, indent=4, ensure_ascii=False)
+        
+        logger.info(f"✅ 质量评估名单保存成功！保存了 {len(teams_list)} 个团队和 {len(authors_list)} 位作者。")
+        return {"message": "质量评估名单保存成功！"}
+    except Exception as e:
+        logger.critical(f"❌ 写入质量评估名单文件时发生致命错误: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"服务器内部错误：无法写入质量名单文件。")
+

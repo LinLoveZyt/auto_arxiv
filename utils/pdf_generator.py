@@ -45,37 +45,38 @@ def format_paper_latex(paper_data: Dict[str, Any], language: str = 'en') -> str:
     
     title = escape_latex_text(paper_data.get('title', 'N/A'))
     arxiv_id = escape_latex_text(paper_data.get('arxiv_id', ''))
+    
+    
+    latex_str = f"\\subsubsection{{{title}}}\n"
+    
+
     published_date_raw = paper_data.get('published_date', '')
     published_date = str(published_date_raw).split('T')[0] if published_date_raw else ''
     
-    classification = paper_data.get('classification', {})
-    domain = escape_latex_text(classification.get('domain', 'N/A'))
-    task = escape_latex_text(classification.get('task', 'N/A'))
+    
+    latex_str += f"\\textbf{{arXiv: {arxiv_id}}} --- \\textbf{{Published: {published_date}}}\\par\\nopagebreak\n\\vspace{{0.5em}}\\hrulefill\n\n"
 
     analysis = paper_data.get('analysis', {})
     problem = escape_latex_text(analysis.get('problem_solved', 'N/A'))
     originality = escape_latex_text(analysis.get('originality', 'N/A'))
     comparison = escape_latex_text(analysis.get('method_comparison', 'N/A'))
     
-    # [核心修改] 获取收录理由
     justification = escape_latex_text(paper_data.get('selection_justification', ''))
 
     headers = {
-        'en': {'problem': 'Problem Solved', 'originality': 'Originality & Innovation', 'comparison': 'Method Comparison', 'fig_arch': 'Figure: Model Architecture/Workflow', 'fig_perf': 'Figure: Performance Comparison', 'category': 'Category', 'reason': 'Reason for Inclusion'},
-        'zh': {'problem': '解决的问题', 'originality': '独创性与创新点', 'comparison': '方法对比', 'fig_arch': '图：模型架构/工作流程', 'fig_perf': '图：性能对比', 'category': '分类', 'reason': '收录理由'}
+        'en': {'problem': 'Problem Solved', 'originality': 'Originality & Innovation', 'comparison': 'Method Comparison', 'fig_arch': 'Figure: Model Architecture/Workflow', 'fig_perf': 'Figure: Performance Comparison', 'reason': 'Reason for Inclusion'},
+        'zh': {'problem': '解决的问题', 'originality': '独创性与创新点', 'comparison': '方法对比', 'fig_arch': '图：模型架构/工作流程', 'fig_perf': '图：性能对比', 'reason': '收录理由'}
     }
     lang_headers = headers.get(language, headers['en'])
-
-    latex_str = f"\\section*{{{title}}}\n"
-    latex_str += f"\\subsection*{{{lang_headers['category']}: {domain} / {task} --- arXiv: {arxiv_id} --- Published: {published_date}}}\n\\vspace{{-1em}}\\hrulefill\n\n"
     
-    # [核心修改] 如果有收录理由，则将其添加到报告中
     if justification:
-        latex_str += f"\\subsubsection*{{{lang_headers['reason']}}}\n\\textcolor{{blue}}{{{justification}}}\n\n"
+        justification_formatted = justification.replace('\n', '\\\\ ')
+        latex_str += f"\\textbf{{{lang_headers['reason']}:}} \\textit{{{justification_formatted}}}\n\n"
+        
 
-    latex_str += f"\\subsubsection*{{{lang_headers['problem']}}}\n{problem}\n\n"
-    latex_str += f"\\subsubsection*{{{lang_headers['originality']}}}\n{originality}\n\n"
-    latex_str += f"\\subsubsection*{{{lang_headers['comparison']}}}\n{comparison}\n\n"
+    latex_str += f"\\textbf{{{lang_headers['problem']}:}} {problem}\n\n"
+    latex_str += f"\\textbf{{{lang_headers['originality']}:}} {originality}\n\n"
+    latex_str += f"\\textbf{{{lang_headers['comparison']}:}} {comparison}\n\n"
 
     images_info = paper_data.get('images', {})
     arch_img_path_str = images_info.get('architecture_image')
@@ -104,18 +105,17 @@ def format_paper_latex(paper_data: Dict[str, Any], language: str = 'en') -> str:
 
 def generate_daily_report_pdf(report_data: Dict[str, Any], output_path: Path, language: str = 'en'):
     """
-    Generates a LaTeX PDF based on the given report data dictionary, including a statistics table.
+    Generates a LaTeX PDF based on the given report data dictionary, including statistics and a table of contents.
     """
-    # ▼▼▼ [修改] 在函数内部获取配置 ▼▼▼
     current_config = config_module.get_current_config()
     report_author = escape_latex_text(current_config['REPORT_AUTHOR'])
 
     report_title = escape_latex_text(report_data.get('report_title', 'Daily arXiv Report'))
     report_date = escape_latex_text(report_data.get('report_date', ''))
-    papers = report_data.get('papers', [])
+    papers_grouped = report_data.get('papers_grouped', {})
     statistics = report_data.get('statistics', {})
 
-    if not papers:
+    if not papers_grouped:
         logger.warning("No papers in the report data, skipping PDF generation.")
         return
 
@@ -132,6 +132,7 @@ def generate_daily_report_pdf(report_data: Dict[str, Any], output_path: Path, la
 \\usepackage{{titling}}
 \\usepackage{{graphicx}}
 \\usepackage{{booktabs}}
+\\usepackage{{tocloft}}
 
 \\definecolor{{TitleBlue}}{{RGB}}{{0, 82, 155}}
 
@@ -154,10 +155,14 @@ def generate_daily_report_pdf(report_data: Dict[str, Any], output_path: Path, la
     linkcolor=TitleBlue,
     urlcolor=cyan,
     pdftitle={{{report_title}}},
-    pdfauthor={{{report_author}}}
+    pdfauthor={{{report_author}}},
+    bookmarks=true,
+    bookmarksopen=true
 }}
 
 \\linespread{{1.3}}
+\\setlength{{\\cftsecnumwidth}}{{2.5em}}
+\\setlength{{\\cftsubsecnumwidth}}{{3.5em}}
 
 \\begin{{document}}
 """
@@ -165,7 +170,11 @@ def generate_daily_report_pdf(report_data: Dict[str, Any], output_path: Path, la
 \end{document}
 """
     
+    
     title_part = f"\\title{{{report_title}}}\n\\author{{{report_author}}}\n\\date{{{report_date}}}\n\\maketitle\n"
+    
+    table_of_contents = "\\tableofcontents\n\\clearpage\n"
+    
     
     stats_part = ""
     if statistics:
@@ -175,7 +184,7 @@ def generate_daily_report_pdf(report_data: Dict[str, Any], output_path: Path, la
         stats_headers = {'en': ('Summary of Today\'s Papers', 'Domain', 'Task', 'Count'), 'zh': ('今日论文总览', '领域', '任务', '数量')}
         lang_stats_headers = stats_headers.get(language, stats_headers['en'])
 
-        stats_part += f"\\section*{{{lang_stats_headers[0]}: {total_papers}}}\n"
+        stats_part += f"\\section*{{{lang_stats_headers[0]}: {total_papers}}}\n\\addcontentsline{{toc}}{{section}}{{{lang_stats_headers[0]}}}\n" # 添加到目录
         stats_part += "\\begin{center}\n\\begin{tabular}{llr}\n"
         stats_part += f"\\toprule\n\\textbf{{{lang_stats_headers[1]}}} & \\textbf{{{lang_stats_headers[2]}}} & \\textbf{{{lang_stats_headers[3]}}} \\\\\n\\midrule\n"
         
@@ -189,15 +198,23 @@ def generate_daily_report_pdf(report_data: Dict[str, Any], output_path: Path, la
                     is_first_in_domain = False
                 else:
                     stats_part += f" & {task_escaped} & {count} \\\\\n"
-            stats_part += "\\midrule\n"
+            if len(breakdown) > 1: # 如果不止一个domain，才加分割线
+                stats_part += "\\midrule\n"
 
         stats_part += "\\bottomrule\n\\end{tabular}\n\\end{center}\n\\clearpage\n"
 
-    content_parts = [latex_header, title_part, stats_part]
     
-    for paper in papers:
-        content_parts.append(format_paper_latex(paper, language=language))
-        content_parts.append("\n\\clearpage\n")
+    content_parts = [latex_header, title_part, table_of_contents, stats_part]
+    
+    for domain, tasks in papers_grouped.items():
+        content_parts.append(f"\\section{{{escape_latex_text(domain)}}}\n")
+        for task, papers in tasks.items():
+            content_parts.append(f"\\subsection{{{escape_latex_text(task)}}}\n")
+            for paper in papers:
+                content_parts.append(format_paper_latex(paper, language=language))
+                content_parts.append("\n\\vspace{2em}\n")
+            content_parts.append("\n\\clearpage\n")
+    
     
     content_parts.append(latex_footer)
     full_latex_doc = "".join(content_parts)
@@ -220,28 +237,28 @@ def generate_daily_report_pdf(report_data: Dict[str, Any], output_path: Path, la
         logger.error("Command 'xelatex' not found. Please ensure a full LaTeX distribution is installed. PDF generation is skipped.")
         return
 
-    # ▼▼▼ [核心修改] 引入编译成功标志位 ▼▼▼
     compilation_successful = True
-    for i in range(2):
-        logger.info(f"--- Starting LaTeX compilation pass {i+1}/2 ---")
+    
+    for i in range(3):
+        logger.info(f"--- Starting LaTeX compilation pass {i+1}/3 ---")
+    
         try:
             process = subprocess.run(
                 ["xelatex", "-interaction=nonstopmode", tex_filepath.name],
                 cwd=output_dir,
                 capture_output=True, text=True, encoding='utf-8', errors='ignore'
             )
-            # 只在最后一次编译后检查返回码
-            if i == 1 and process.returncode != 0:
-                logger.error(f"LaTeX compilation failed after 2 passes. See log file for details: {output_dir / (base_filename + '.log')}")
-                compilation_successful = False # 标记编译失败
+            if process.returncode != 0:
+                logger.error(f"LaTeX compilation pass {i+1} failed. See log file for details: {output_dir / (base_filename + '.log')}")
+                compilation_successful = False
+                break
         except Exception as e:
             logger.critical(f"A critical error occurred during LaTeX compilation: {e}")
             compilation_successful = False
-            break # 出现严重异常，直接跳出循环
+            break 
     
     final_pdf_path = output_dir / f"{base_filename}.pdf"
     
-    # ▼▼▼ [核心修改] 仅在编译成功且文件存在时，才宣告成功并清理文件 ▼▼▼
     if final_pdf_path.exists() and compilation_successful:
         logger.info(f"🎉 Successfully generated PDF report: {final_pdf_path}")
         for ext in ['.aux', '.log', '.out', '.toc', '.tex']:

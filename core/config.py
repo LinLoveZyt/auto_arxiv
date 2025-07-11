@@ -20,6 +20,8 @@ METADATA_DB_PATH = DATABASE_DIR / "metadata.sqlite3"
 FAISS_INDEX_PATH = DATABASE_DIR / "hrag_index.faiss"
 CATEGORIES_JSON_PATH = STORAGE_DIR / "categories.json"
 USER_PREFERENCES_PATH = STORAGE_DIR / "user_preferences.json"
+STRONG_TEAMS_PATH = STORAGE_DIR / "strong_teams.json"
+STRONG_AUTHORS_PATH = STORAGE_DIR / "strong_authors.json"
 DAILY_REPORT_PREFIX = "Daily_arXiv_Report"
 
 
